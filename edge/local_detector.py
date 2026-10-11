@@ -6,10 +6,12 @@ the pipeline, logging, real-time replay and evaluation work unchanged and the
 policy engine can switch between the two per frame. Classes are COCO, like the
 ground-station model, so the accuracy of both modes is directly comparable.
 
-Runtime (any one of): ai-edge-litert (pip install ai-edge-litert),
-tflite-runtime, or full tensorflow.
+Two model formats:
+* ``.onnx``   INT8 QDQ model from tools.quantize_onnx, run with onnxruntime
+              (pip install onnxruntime) - the default
+* ``.tflite`` LiteRT/TFLite model, run with ai-edge-litert, tflite-runtime or tensorflow
 
-    det = LocalDetector("models/yolov8n_int8_320.tflite")
+    det = LocalDetector("models/yolov8n_int8_320.onnx")
     res = det.detect(frame_bgr, "0000001")      # -> RemoteResult, network fields = 0
 """
 from __future__ import annotations
@@ -70,19 +72,41 @@ class LocalDetector:
             raise FileNotFoundError(f"model not found: {model_path}")
         self.model_name = os.path.basename(model_path)
         self.conf, self.iou, self.max_det = conf, iou, max_det
-        self.interp = _load_interpreter(model_path, num_threads or os.cpu_count() or 4)
-        self.interp.allocate_tensors()
-        self.inp = self.interp.get_input_details()[0]
-        self.out = self.interp.get_output_details()[0]
+        threads = num_threads or os.cpu_count() or 4
+        self.backend = "onnxruntime" if model_path.lower().endswith(".onnx") else "litert"
+        if self.backend == "onnxruntime":
+            import onnxruntime as ort
+
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = threads
+            self.sess = ort.InferenceSession(model_path, so, providers=["CPUExecutionProvider"])
+            i, o = self.sess.get_inputs()[0], self.sess.get_outputs()[0]
+            self.inp = {"name": i.name, "shape": [1 if not isinstance(d, int) else d for d in i.shape],
+                        "dtype": np.float32, "quantization": (0.0, 0)}
+            self.out = {"name": o.name, "dtype": np.float32, "quantization": (0.0, 0)}
+        else:
+            self.interp = _load_interpreter(model_path, threads)
+            self.interp.allocate_tensors()
+            self.inp = self.interp.get_input_details()[0]
+            self.out = self.interp.get_output_details()[0]
         shape = list(self.inp["shape"])                       # NHWC or NCHW
         self.nchw = shape[1] == 3
         self.imgsz = int(shape[2] if self.nchw else shape[1])
         self.in_scale, self.in_zero = self.inp.get("quantization", (0.0, 0))
+        self.inp["dtype"] = np.dtype(self.inp["dtype"]).type
         self.out_scale, self.out_zero = self.out.get("quantization", (0.0, 0))
         self.detect(np.zeros((self.imgsz, self.imgsz, 3), np.uint8))   # warm-up
 
     def health(self) -> dict:      # same shape as RemoteDetector.health()
-        return {"model": self.model_name, "device": f"local cpu, {self.inp['dtype'].__name__} input"}
+        return {"model": self.model_name,
+                "device": f"local cpu ({self.backend}, {np.dtype(self.inp['dtype']).name} input)"}
+
+    def _run(self, x: np.ndarray) -> np.ndarray:
+        if self.backend == "onnxruntime":
+            return self.sess.run([self.out["name"]], {self.inp["name"]: x})[0]
+        self.interp.set_tensor(self.inp["index"], x)
+        self.interp.invoke()
+        return self.interp.get_tensor(self.out["index"])
 
     def ping(self, n: int = 3) -> Optional[float]:   # no link involved
         return None
@@ -105,7 +129,7 @@ class LocalDetector:
 
     def _postprocess(self, y: np.ndarray, gain: float, pad: Tuple[int, int],
                      orig: Tuple[int, int]) -> List[dict]:
-        if self.out["dtype"] in (np.int8, np.uint8):
+        if np.dtype(self.out["dtype"]).type in (np.int8, np.uint8):
             y = (y.astype(np.float32) - self.out_zero) * self.out_scale
         y = y[0]
         ch = 4 + len(COCO_NAMES)                              # 84 = box + class scores
@@ -151,9 +175,7 @@ class LocalDetector:
         t0 = time.perf_counter()
         x, gain, pad = self._preprocess(frame_bgr)
         t1 = time.perf_counter()
-        self.interp.set_tensor(self.inp["index"], x)
-        self.interp.invoke()
-        y = self.interp.get_tensor(self.out["index"])
+        y = self._run(x)
         t2 = time.perf_counter()
         old = self.conf
         if conf is not None:

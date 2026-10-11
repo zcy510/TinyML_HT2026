@@ -228,3 +228,4 @@ data/
 # model export / quantisation intermediates (the final models/*.tflite IS committed)
 *.onnx
 *.npy
+!models/*.onnx

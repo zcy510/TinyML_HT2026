@@ -9,7 +9,7 @@
 #                     mock  = test the Pi alone: starts a fake ground station on
 #                             the Pi itself (no model, returns no detections)
 #                     local = edge mode: run the INT8 model on the Pi itself
-#                             (default models/yolov8n_int8_320.tflite; --model X)
+#                             (default models/yolov8n_int8_320.onnx; --model X)
 #   [source]         coco128 (default: downloads 128 labelled COCO images and
 #                     also evaluates precision/recall) | picam | 0 (USB cam) |
 #                     path/to/folder | video.mp4 |
@@ -129,15 +129,22 @@ else
   cp "$REQ" "$VENV/.installed-requirements-edge.txt"
 fi
 
-# LiteRT runtime for the on-board model (edge mode). numpy is pinned to the version
-# already installed, so the apt-built OpenCV/picamera2 keep working on the Pi.
-if [ "$LOCAL" = 1 ] && ! python -c "import ai_edge_litert" 2>/dev/null \
-   && ! python -c "import tflite_runtime" 2>/dev/null; then
-  say "Installing LiteRT runtime (ai-edge-litert) for local inference"
+# Runtime for the on-board INT8 model (edge mode): onnxruntime for .onnx (default),
+# ai-edge-litert for .tflite. numpy is pinned to the version already installed, so the
+# apt-built OpenCV/picamera2 keep working on the Pi.
+if [ "$LOCAL" = 1 ]; then
   NP_VER="$(python -c 'import numpy; print(numpy.__version__)')"
-  python -m pip install ai-edge-litert "numpy==$NP_VER" \
-    || python -m pip install tflite-runtime "numpy==$NP_VER" \
-    || die "could not install a LiteRT/TFLite runtime for this Python version"
+  if [[ " ${EXTRA[*]-} " == *".tflite"* ]]; then
+    if ! python -c "import ai_edge_litert" 2>/dev/null && ! python -c "import tflite_runtime" 2>/dev/null; then
+      say "Installing LiteRT runtime (ai-edge-litert) for the .tflite model"
+      python -m pip install ai-edge-litert "numpy==$NP_VER" \
+        || python -m pip install tflite-runtime "numpy==$NP_VER" \
+        || die "could not install a LiteRT/TFLite runtime for this Python version"
+    fi
+  elif ! python -c "import onnxruntime" 2>/dev/null; then
+    say "Installing onnxruntime for the INT8 ONNX model"
+    python -m pip install onnxruntime "numpy==$NP_VER" || die "could not install onnxruntime"
+  fi
 fi
 
 # ------------------------------------------------------------ test data / source

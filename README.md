@@ -12,12 +12,14 @@ ground_station/      Remote high-complexity mode (runs on the Windows PC)
   server.py            FastAPI server: /health, /ping, /detect; per-frame CSV log
 edge/                UAV side (Raspberry Pi 5)
   frame_source.py      folder / video / camera / picam frames; --realtime camera replay
-  local_detector.py    edge mode: INT8 YOLOv8n LiteRT/TFLite on the Pi (same interface as remote)
+  local_detector.py    edge mode: INT8 YOLOv8n (ONNX Runtime or LiteRT) on the Pi, same interface as remote
   remote_client.py     JPEG encode + optional downscale, send, map boxes back, timing
   run_remote.py        CLI: any source -> server, CSV log + summary
 tools/
   visdrone.py          VisDrone2019-VID annotations -> YOLO labels with COCO class ids
-  make_calib_npy.py    representative .npy for INT8 quantisation (Edge Impulse BYOM)
+  export_onnx_norm.py  YOLOv8 -> ONNX with 0..1 boxes (INT8-friendly output)
+  make_calib_npy.py    calibration frames (.npy) for INT8 quantisation
+  quantize_onnx.py     static INT8 quantisation with ONNX Runtime
   eval_detection.py    Precision / recall / F1 @ IoU vs YOLO-format labels (ignore regions, hold-last)
   summarize_log.py     Latency / bandwidth / reliability / drop-rate table per setting
 tests/                 pytest (fake detector, no GPU needed); RUN_YOLO=1 for real model
@@ -29,7 +31,7 @@ scripts/               Windows setup + start scripts for the ground station
 | Plan step | Status |
 |---|---|
 | Remote high-complexity detection pipeline (Oct 5-8) | Implemented |
-| Lightweight TinyML edge pipeline (Oct 9-11) | Implemented (INT8 YOLOv8n via Edge Impulse) |
+| Lightweight TinyML edge pipeline (Oct 9-11) | Implemented (INT8 YOLOv8n, ONNX Runtime PTQ) |
 | Link monitoring + threshold policy engine (Oct 12-15) | Planned (`/ping` RTT already in place) |
 | Integration, experiments, analysis (Oct 16-29) | Planned |
 
@@ -137,27 +139,32 @@ Notes on scoring:
 
 ## Edge mode: on-board INT8 model
 
-`models/yolov8n_int8_320.tflite`: YOLOv8n (COCO, 320x320 input), exported to ONNX and quantised
-to INT8 with Edge Impulse BYOM:
+`models/yolov8n_int8_320.onnx`: YOLOv8n (COCO, 320x320 input), static INT8 post-training
+quantisation with ONNX Runtime (weights INT8 per channel, activations UINT8 calibrated on 100
+VisDrone frames from a sequence that is *not* used for evaluation). 3.6 MB vs 12.7 MB float;
+on 21 frames 86% of its detections match the float model at IoU 0.5, ~3x faster on CPU.
 
 ```bash
-yolo export model=yolov8n.pt format=onnx imgsz=320 opset=12 simplify=True
-python -m tools.make_calib_npy data/uav0000117_02622_v --imgsz 320 --n 100   # calibration frames
-# Edge Impulse: Upload your model (yolov8n.onnx + calib_320.npy); input image, pixels 0..1,
-# resize "Fit longest axis"; output Object detection, "YOLOv11 (coordinates in absolute values)",
-# 80 COCO labels, score threshold 0.25. Download the LiteRT/TFLite int8 model.
+python -m tools.export_onnx_norm --weights yolov8n.pt --imgsz 320    # boxes in 0..1 (see file)
+python -m tools.make_calib_npy data/uav0000117_02622_v --imgsz 320 --n 100
+python -m tools.quantize_onnx --model yolov8n_norm_320.onnx --calib calib_320.npy
 ```
 
-Run it on the Pi (no ground station needed; `deploy_edge.sh` installs `ai-edge-litert`):
+All convolutions run in INT8; only the detection head's decode arithmetic stays float.
+(An Edge Impulse BYOM INT8 TFLite of the same model was unusable: its single INT8 output
+tensor forced boxes and class scores into one scale, so either all scores or all boxes were
+lost. `.tflite` models are still supported by `edge/local_detector.py`.)
+
+Run it on the Pi (no ground station needed; `deploy_edge.sh` installs `onnxruntime`):
 
 ```bash
 ./scripts/deploy_edge.sh local data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
-python -m edge.run_remote --mode local --model models/yolov8n_int8_320.tflite --source <seq> --realtime
+python -m edge.run_remote --mode local --source <seq> --realtime
 ```
 
 The log uses the same columns as remote mode (`network_ms` and `upload_bytes` are 0;
-`inference_ms` is the model invoke time, `encode_ms` the letterbox/quantise step), so
-`summarize_log` and `eval_detection` compare edge-only and remote runs directly.
+`inference_ms` is the model run time, `encode_ms` the letterbox step), so `summarize_log`
+and `eval_detection` compare edge-only and remote runs directly.
 
 ## 3. Evaluation
 

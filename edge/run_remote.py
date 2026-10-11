@@ -16,7 +16,7 @@ python -m edge.run_remote --server http://192.168.1.50:8000 --source 0 --max-fra
 python -m edge.run_remote --server http://192.168.1.50:8000 --source picam
 
 # edge mode: on-board INT8 YOLOv8n, no ground station needed
-python -m edge.run_remote --mode local --model models/yolov8n_int8_320.tflite \
+python -m edge.run_remote --mode local --model models/yolov8n_int8_320.onnx \
     --source data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
 
 Writes one CSV row per frame (default logs/remote_client_log.csv) and prints a
@@ -103,8 +103,8 @@ def main() -> None:
                     help="remote = ground station (needs --server); local = on-board INT8 "
                          "model (needs --model)")
     ap.add_argument("--server", default=None, help="e.g. http://192.168.1.50:8000")
-    ap.add_argument("--model", default="models/yolov8n_int8_320.tflite",
-                    help="LiteRT/TFLite model for --mode local")
+    ap.add_argument("--model", default="models/yolov8n_int8_320.onnx",
+                    help="INT8 model for --mode local (.onnx via onnxruntime, or .tflite)")
     ap.add_argument("--threads", type=int, default=None, help="CPU threads for --mode local")
     ap.add_argument("--source", required=True, help="folder | image | video | camera index | picam")
     ap.add_argument("--max-frames", type=int, default=0, help="0 = all")
