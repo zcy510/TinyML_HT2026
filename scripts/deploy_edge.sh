@@ -6,13 +6,17 @@
 #   ./scripts/deploy_edge.sh <ground-station> [source] [extra run_remote args...]
 #
 #   <ground-station>  192.168.31.50  |  192.168.31.50:8000  |  http://host:8000
-#   [source]          coco128 (default: downloads 128 labelled COCO images and
+#                     mock  = test the Pi alone: starts a fake ground station on
+#                             the Pi itself (no model, returns no detections)
+#   [source]         coco128 (default: downloads 128 labelled COCO images and
 #                     also evaluates precision/recall) | picam | 0 (USB cam) |
 #                     path/to/folder | video.mp4
 #   extra args        anything edge.run_remote accepts, e.g.
 #                     --max-width 320 --quality 70 --max-frames 50
 #
 # Examples
+#   ./scripts/deploy_edge.sh mock                      # Pi-only smoke test
+#   ./scripts/deploy_edge.sh mock picam --max-frames 20
 #   ./scripts/deploy_edge.sh 192.168.31.50
 #   ./scripts/deploy_edge.sh 192.168.31.50 picam --max-frames 100
 #   ./scripts/deploy_edge.sh 192.168.31.50 coco128 --max-width 320 --quality 70
@@ -35,13 +39,20 @@ die()  { printf '\033[1;31m[deploy-edge] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ arguments
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 SERVER="$1"; shift
 SOURCE="coco128"
 if [ $# -gt 0 ] && [[ "$1" != --* ]]; then SOURCE="$1"; shift; fi
 EXTRA=("$@")
+
+MOCK=0
+MOCK_PORT=8765
+if [ "$SERVER" = "mock" ]; then
+  MOCK=1
+  SERVER="http://127.0.0.1:$MOCK_PORT"
+fi
 
 # normalise "192.168.31.50" -> "http://192.168.31.50:8000"
 [[ "$SERVER" == *://* ]] || SERVER="http://$SERVER"
@@ -121,6 +132,24 @@ if [ "$SOURCE" = "coco128" ]; then
   LABELS="$ROOT/data/coco128/labels/train2017"
 fi
 
+# ------------------------------------------- mock mode: fake GS on this device
+if [ "$MOCK" = 1 ]; then
+  say "MOCK MODE: starting a fake ground station on this device (no model)"
+  python -m ground_station.mock_server --host 127.0.0.1 --port "$MOCK_PORT" &
+  MOCK_PID=$!
+  trap 'kill $MOCK_PID 2>/dev/null || true' EXIT
+  python - "$SERVER" <<'PY' || die "mock ground station did not start"
+import sys, time, requests
+for _ in range(60):                      # wait up to ~15 s (OpenCV import is slow on the Pi)
+    try:
+        requests.get(sys.argv[1] + "/health", timeout=1); sys.exit(0)
+    except Exception:
+        time.sleep(0.25)
+sys.exit(1)
+PY
+  LABELS=""   # no real detections -> accuracy would be meaningless
+fi
+
 # ------------------------------------------------------ 4. ground station check
 say "4/5 Checking ground station at $SERVER"
 if ! python - "$SERVER" <<'PY'
@@ -157,5 +186,9 @@ if [ -n "$LABELS" ]; then
   python -m tools.eval_detection --pred "$DETS" --images "$SOURCE" --labels "$LABELS"
 fi
 
+if [ "$MOCK" = 1 ]; then
+  say "Mock run finished: capture, encoding, transfer and logging on the Pi all work."
+  echo "Latency here is Pi-local (no Wi-Fi, no model); detections are empty by design."
+fi
 say "Done. Log: logs/$(basename "$LOG")   Detections: logs/$(basename "$DETS")"
 echo "To keep using this environment in your shell:  source .venv/bin/activate"
