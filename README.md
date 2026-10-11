@@ -11,11 +11,13 @@ ground_station/      Remote high-complexity mode (runs on the Windows PC)
   detector.py          YOLOv8s wrapper (auto CUDA/CPU, thread-safe, timing)
   server.py            FastAPI server: /health, /ping, /detect; per-frame CSV log
 edge/                UAV side (Raspberry Pi 5)
+  frame_source.py      folder / video / camera / picam frames; --realtime camera replay
   remote_client.py     JPEG encode + optional downscale, send, map boxes back, timing
-  run_remote.py        CLI: folder / video / camera / picam -> server, CSV log + summary
+  run_remote.py        CLI: any source -> server, CSV log + summary
 tools/
-  eval_detection.py    Precision / recall / F1 @ IoU vs YOLO-format labels
-  summarize_log.py     Latency / bandwidth / reliability table per resolution
+  visdrone.py          VisDrone2019-VID annotations -> YOLO labels with COCO class ids
+  eval_detection.py    Precision / recall / F1 @ IoU vs YOLO-format labels (ignore regions, hold-last)
+  summarize_log.py     Latency / bandwidth / reliability / drop-rate table per setting
 tests/                 pytest (fake detector, no GPU needed); RUN_YOLO=1 for real model
 scripts/               Windows setup + start scripts for the ground station
 ```
@@ -43,6 +45,7 @@ Each script creates `.venv`, installs dependencies (only again when the requirem
 ./scripts/deploy_edge.sh 192.168.31.50                                    # COCO128, full resolution
 ./scripts/deploy_edge.sh 192.168.31.50 coco128 --max-width 320 --quality 70   # reduced-resolution mode
 ./scripts/deploy_edge.sh 192.168.31.50 picam --max-frames 100             # Pi camera
+./scripts/deploy_edge.sh 192.168.31.50 data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime   # drone video
 ```
 
 Home test with only the Mac and the Pi: run `./scripts/deploy_ground.sh` on the Mac, then `./scripts/deploy_edge.sh <Mac-IP>` on the Pi.
@@ -83,6 +86,52 @@ python -m edge.run_remote --server http://<PC-IP>:8000 --source data/images --ma
 ```
 
 Each frame logs `encode_ms, network_ms, server_ms, inference_ms, e2e_ms, upload_bytes, rtt_ms, within_deadline` to `logs/remote_client_log.csv`.
+
+## Video input and real-time replay (main experiments)
+
+We have no Pi camera, so drone footage is replayed from disk. A COCO128 folder is a set of
+unrelated photos; a drone sees a continuous video at a fixed frame rate. Two things matter:
+
+1. **Temporal continuity.** Use a video file or an ordered frame sequence. Both work as
+   `--source`; a folder is read in file-name order, so a VisDrone-VID sequence folder *is* a video.
+2. **Real-time behaviour (`--realtime`).** Without it every frame is processed however long it
+   takes, so a slow link shows up as high latency but zero lost frames. With it the source is
+   replayed like a live camera at `--fps` (default: the video's own rate, 30 for a folder): the
+   pipeline always gets the frame the camera is showing *now*, and frames that pass while it is
+   busy are dropped, as on the real UAV. Extra log columns: `src_index`, `dropped` and `age_ms`
+   (capture -> result available, always >= `e2e_ms`). The summary adds `drop_rate` and `processed_fps`.
+
+Recommended dataset: **VisDrone2019-VID-val** (real UAV video, every frame annotated). Download it
+from <https://github.com/VisDrone/VisDrone-Dataset> and unzip it into `data/`:
+
+```bash
+python -m tools.visdrone list data/VisDrone2019-VID-val                      # sequences, length, size
+python -m tools.visdrone convert data/VisDrone2019-VID-val/sequences/uav0000086_00000_v   # -> data/visdrone_labels/...
+python -m tools.visdrone convert <seq_dir> --video data/uav0000086.mp4        # optional: also an mp4
+
+python -m edge.run_remote --server http://<PC-IP>:8000 --realtime --fps 30 \
+    --source data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --save-json logs/dets.json
+python -m tools.eval_detection --pred logs/dets.json \
+    --images data/VisDrone2019-VID-val/sequences/uav0000086_00000_v \
+    --labels data/visdrone_labels/uav0000086_00000_v --classes 0,1,2,3,5,7 --hold-last
+```
+
+`deploy_edge.sh` does the conversion and evaluation automatically when the source is a VisDrone-VID
+sequence folder.
+
+Notes on scoring:
+- **Class mapping VisDrone -> COCO:** pedestrian and people -> person, bicycle, car, van -> car,
+  truck, bus, motor -> motorcycle. Tricycles, "others" and VisDrone's ignored regions become
+  *ignore regions*: they are never required, and a prediction there is not a false positive.
+  `--classes 0,1,2,3,5,7` scores only the COCO classes that exist in VisDrone.
+- VisDrone has many tiny objects. `convert --min-size 8` turns objects under 8 px into ignore regions.
+- `--hold-last` scores every frame of the sequence: frames dropped in real-time mode reuse the last
+  processed result. That is what the UAV knows at each moment, so the score reflects both drops
+  and misses. (It is slightly optimistic: in practice a result only arrives `age_ms` after capture.)
+  Without `--hold-last`, only processed frames are scored.
+- A plain mp4 without labels can still be used for latency, bandwidth and drop rate. To score a
+  converted mp4, use `--labels ... --img-size 1344x756` instead of `--images`; video frames are
+  named `0000001, 0000002, ...` like VisDrone frames.
 
 ## 3. Evaluation
 

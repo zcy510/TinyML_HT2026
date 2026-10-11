@@ -10,9 +10,13 @@
 #                             the Pi itself (no model, returns no detections)
 #   [source]         coco128 (default: downloads 128 labelled COCO images and
 #                     also evaluates precision/recall) | picam | 0 (USB cam) |
-#                     path/to/folder | video.mp4
+#                     path/to/folder | video.mp4 |
+#                     a VisDrone-VID sequence folder (.../sequences/<name>):
+#                     labels are converted automatically and accuracy is scored
 #   extra args        anything edge.run_remote accepts, e.g.
 #                     --max-width 320 --quality 70 --max-frames 50
+#                     --realtime [--fps 30]   replay video/sequence like a live
+#                                             camera, dropping late frames
 #
 # Examples
 #   ./scripts/deploy_edge.sh mock                      # Pi-only smoke test
@@ -20,10 +24,12 @@
 #   ./scripts/deploy_edge.sh 192.168.31.50
 #   ./scripts/deploy_edge.sh 192.168.31.50 picam --max-frames 100
 #   ./scripts/deploy_edge.sh 192.168.31.50 coco128 --max-width 320 --quality 70
+#   ./scripts/deploy_edge.sh 192.168.31.50 \
+#       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
 #
 # What it does: system packages (Pi only) -> .venv -> Python deps (only when
 # requirements change) -> checks the ground station -> runs the remote pipeline
-# -> prints latency / bandwidth / reliability (+ accuracy for coco128).
+# -> prints latency / bandwidth / reliability (+ accuracy for coco128 and VisDrone-VID).
 # =============================================================================
 set -euo pipefail
 
@@ -39,7 +45,7 @@ die()  { printf '\033[1;31m[deploy-edge] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ arguments
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 SERVER="$1"; shift
@@ -132,6 +138,24 @@ if [ "$SOURCE" = "coco128" ]; then
   LABELS="$ROOT/data/coco128/labels/train2017"
 fi
 
+# VisDrone-VID sequence: .../sequences/<name> with .../annotations/<name>.txt
+EVAL_ARGS=()
+if [ -d "$SOURCE" ]; then
+  SEQ_NAME="$(basename "$SOURCE")"
+  VD_ANN="$(cd "$SOURCE/../.." && pwd)/annotations/$SEQ_NAME.txt"
+  if [ -f "$VD_ANN" ]; then
+    LABELS="$ROOT/data/visdrone_labels/$SEQ_NAME"
+    if [ ! -d "$LABELS" ]; then
+      say "VisDrone-VID sequence detected: converting labels to COCO classes"
+      python -m tools.visdrone convert "$SOURCE" --out "$LABELS"
+    fi
+    EVAL_ARGS=(--classes 0,1,2,3,5,7)
+    for a in ${EXTRA[@]+"${EXTRA[@]}"}; do
+      [ "$a" = "--realtime" ] && EVAL_ARGS+=(--hold-last)
+    done
+  fi
+fi
+
 # ------------------------------------------- mock mode: fake GS on this device
 if [ "$MOCK" = 1 ]; then
   say "MOCK MODE: starting a fake ground station on this device (no model)"
@@ -182,8 +206,9 @@ say "Summary per setting (max width + JPEG quality)"
 python -m tools.summarize_log "$LOG" || warn "summary needs pandas"
 
 if [ -n "$LABELS" ]; then
-  say "Detection accuracy vs COCO128 labels (IoU 0.5)"
-  python -m tools.eval_detection --pred "$DETS" --images "$SOURCE" --labels "$LABELS"
+  say "Detection accuracy vs ground-truth labels (IoU 0.5)"
+  python -m tools.eval_detection --pred "$DETS" --images "$SOURCE" --labels "$LABELS" \
+    ${EVAL_ARGS[@]+"${EVAL_ARGS[@]}"}
 fi
 
 if [ "$MOCK" = 1 ]; then

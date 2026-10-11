@@ -1,4 +1,6 @@
-"""Summarise one or more client CSV logs, grouped by run setting (resolution + JPEG quality).
+"""Summarise one or more client CSV logs, grouped by run setting (resolution + JPEG
+quality, "_rt" = real-time replay). drop_rate = share of camera frames skipped
+because the pipeline was busy; age = capture -> result available.
 
 python -m tools.summarize_log logs/remote_client_log.csv --deadline-ms 500
 """
@@ -32,6 +34,11 @@ def summarize(df: pd.DataFrame, deadline_ms: float) -> pd.DataFrame:
         "upload_kb": df.groupby("res")["upload_bytes"].mean() / 1024,
         "dets_per_frame": g["num_detections"].mean(),
     })
+    if "dropped" in df.columns:          # logs written with --realtime support
+        dropped = df.groupby("res")["dropped"].sum()
+        out["drop_rate"] = dropped / (dropped + out["frames"])
+        out["age_mean"] = g["age_ms"].mean()
+        out["age_p95"] = g["age_ms"].quantile(0.95)
     return out.round(2)
 
 
