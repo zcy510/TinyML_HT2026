@@ -1,0 +1,6 @@
+# UAV edge device (Raspberry Pi 5) - remote mode client only.
+# On the Pi, the camera library comes from apt: sudo apt install -y python3-picamera2
+numpy
+opencv-python-headless>=4.8
+requests
+pandas
