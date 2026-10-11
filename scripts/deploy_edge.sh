@@ -8,6 +8,8 @@
 #   <ground-station>  192.168.31.50  |  192.168.31.50:8000  |  http://host:8000
 #                     mock  = test the Pi alone: starts a fake ground station on
 #                             the Pi itself (no model, returns no detections)
+#                     local = edge mode: run the INT8 model on the Pi itself
+#                             (default models/yolov8n_int8_320.tflite; --model X)
 #   [source]         coco128 (default: downloads 128 labelled COCO images and
 #                     also evaluates precision/recall) | picam | 0 (USB cam) |
 #                     path/to/folder | video.mp4 |
@@ -25,6 +27,8 @@
 #   ./scripts/deploy_edge.sh 192.168.31.50 picam --max-frames 100
 #   ./scripts/deploy_edge.sh 192.168.31.50 coco128 --max-width 320 --quality 70
 #   ./scripts/deploy_edge.sh 192.168.31.50 \
+#       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
+#   ./scripts/deploy_edge.sh local \
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
 #
 # What it does: system packages (Pi only) -> .venv -> Python deps (only when
@@ -45,7 +49,7 @@ die()  { printf '\033[1;31m[deploy-edge] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ arguments
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 SERVER="$1"; shift
@@ -55,15 +59,20 @@ EXTRA=("$@")
 
 MOCK=0
 MOCK_PORT=8765
-if [ "$SERVER" = "mock" ]; then
+LOCAL=0
+if [ "$SERVER" = "local" ]; then
+  LOCAL=1
+elif [ "$SERVER" = "mock" ]; then
   MOCK=1
   SERVER="http://127.0.0.1:$MOCK_PORT"
 fi
 
 # normalise "192.168.31.50" -> "http://192.168.31.50:8000"
-[[ "$SERVER" == *://* ]] || SERVER="http://$SERVER"
-SERVER="${SERVER%/}"
-[[ "$SERVER" =~ :[0-9]+$ ]] || SERVER="$SERVER:8000"
+if [ "$LOCAL" = 0 ]; then
+  [[ "$SERVER" == *://* ]] || SERVER="http://$SERVER"
+  SERVER="${SERVER%/}"
+  [[ "$SERVER" =~ :[0-9]+$ ]] || SERVER="$SERVER:8000"
+fi
 
 IS_PI=0
 if [ -r /proc/device-tree/model ] && grep -qa "Raspberry Pi" /proc/device-tree/model; then
@@ -118,6 +127,17 @@ else
   python -m pip install --upgrade pip
   python -m pip install -r "$REQ"
   cp "$REQ" "$VENV/.installed-requirements-edge.txt"
+fi
+
+# LiteRT runtime for the on-board model (edge mode). numpy is pinned to the version
+# already installed, so the apt-built OpenCV/picamera2 keep working on the Pi.
+if [ "$LOCAL" = 1 ] && ! python -c "import ai_edge_litert" 2>/dev/null \
+   && ! python -c "import tflite_runtime" 2>/dev/null; then
+  say "Installing LiteRT runtime (ai-edge-litert) for local inference"
+  NP_VER="$(python -c 'import numpy; print(numpy.__version__)')"
+  python -m pip install ai-edge-litert "numpy==$NP_VER" \
+    || python -m pip install tflite-runtime "numpy==$NP_VER" \
+    || die "could not install a LiteRT/TFLite runtime for this Python version"
 fi
 
 # ------------------------------------------------------------ test data / source
@@ -175,6 +195,11 @@ PY
 fi
 
 # ------------------------------------------------------ 4. ground station check
+if [ "$LOCAL" = 1 ]; then
+  say "4/5 Local mode: no ground station needed"
+  RUN_TARGET=(--mode local)
+else
+RUN_TARGET=(--server "$SERVER")
 say "4/5 Checking ground station at $SERVER"
 if ! python - "$SERVER" <<'PY'
 import sys, requests
@@ -191,6 +216,7 @@ then
   die "Ground station not reachable. Is the server running, on the same network,
        and is port 8000 allowed through the PC firewall?"
 fi
+fi
 
 # ---------------------------------------------------------------- 5. run it
 mkdir -p "$ROOT/logs"
@@ -198,8 +224,8 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="$ROOT/logs/remote_client_${STAMP}.csv"
 DETS="$ROOT/logs/remote_dets_${STAMP}.json"
 
-say "5/5 Running remote pipeline (source: $SOURCE)"
-python -m edge.run_remote --server "$SERVER" --source "$SOURCE" \
+say "5/5 Running pipeline ($([ "$LOCAL" = 1 ] && echo local || echo remote) mode, source: $SOURCE)"
+python -m edge.run_remote "${RUN_TARGET[@]}" --source "$SOURCE" \
   --log "$LOG" --save-json "$DETS" ${EXTRA[@]+"${EXTRA[@]}"}
 
 say "Summary per setting (max width + JPEG quality)"

@@ -107,3 +107,31 @@ def test_eval_hold_last_scores_dropped_frames(tmp_path):
     assert (held["frames"], held["frames_held"], held["tp"], held["fn"]) == (4, 2, 2, 6)
     by_size = evaluate(pred, None, tmp_path / "labels", img_size=(64, 48), **kw)
     assert by_size["tp"] == only["tp"] and by_size["fn"] == only["fn"]
+
+
+def test_local_detector_postprocess_maps_boxes_back():
+    """Decode a fake YOLOv8 output (1, 84, N) with int8 quantisation and letterbox padding."""
+    from edge.local_detector import LocalDetector, letterbox
+
+    det = LocalDetector.__new__(LocalDetector)            # skip model loading
+    det.conf, det.iou, det.max_det, det.imgsz = 0.25, 0.45, 300, 320
+    det.out = {"dtype": np.int8}
+    det.out_scale, det.out_zero = 2.0, 0                  # int8 * 2 -> 0..254 range
+    img = np.zeros((180, 640, 3), np.uint8)               # gain 0.5, pad top 115
+    _, gain, pad = letterbox(img, 320)
+    assert gain == 0.5 and pad == (0, 115)
+    y = np.zeros((1, 84, 3), np.float32)
+    y[0, :4, 0] = [60, 160, 40, 20]                       # car at (40..80, 150..170) in input px
+    y[0, 4 + 2, 0] = 0.9
+    y[0, :4, 1] = [62, 160, 40, 20]                       # duplicate, lower score -> NMS
+    y[0, 4 + 2, 1] = 0.6
+    y[0, :4, 2] = [200, 150, 10, 10]                      # below threshold
+    y[0, 4 + 0, 2] = 0.1
+    q = np.round(y / 2.0).astype(np.int8)                 # coords /2 so they fit in int8
+    q[0, 4:, :] = 0
+    dets = det._postprocess(q, gain, pad, (640, 180))
+    assert dets == []                                     # scores quantised to 0 -> nothing
+    det.out = {"dtype": np.float32}                       # float output path
+    dets = det._postprocess(y, gain, pad, (640, 180))
+    assert len(dets) == 1 and dets[0]["label"] == "car"
+    assert dets[0]["box"] == [80.0, 70.0, 160.0, 110.0]   # (x - 0)/0.5, (y - 115)/0.5

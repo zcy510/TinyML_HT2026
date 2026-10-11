@@ -15,6 +15,10 @@ python -m edge.run_remote --server http://192.168.1.50:8000 \
 python -m edge.run_remote --server http://192.168.1.50:8000 --source 0 --max-frames 50 --max-width 320
 python -m edge.run_remote --server http://192.168.1.50:8000 --source picam
 
+# edge mode: on-board INT8 YOLOv8n, no ground station needed
+python -m edge.run_remote --mode local --model models/yolov8n_int8_320.tflite \
+    --source data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
+
 Writes one CSV row per frame (default logs/remote_client_log.csv) and prints a
 summary: latency percentiles, bytes/frame, and reliability (= share of frames
 with a valid result within --deadline-ms); in --realtime mode also the share of
@@ -95,7 +99,13 @@ def summarize(rows, deadline_ms: float, wall_s: float = 0.0) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="UAV -> ground station remote detection")
-    ap.add_argument("--server", required=True, help="e.g. http://192.168.1.50:8000")
+    ap.add_argument("--mode", choices=["remote", "local"], default="remote",
+                    help="remote = ground station (needs --server); local = on-board INT8 "
+                         "model (needs --model)")
+    ap.add_argument("--server", default=None, help="e.g. http://192.168.1.50:8000")
+    ap.add_argument("--model", default="models/yolov8n_int8_320.tflite",
+                    help="LiteRT/TFLite model for --mode local")
+    ap.add_argument("--threads", type=int, default=None, help="CPU threads for --mode local")
     ap.add_argument("--source", required=True, help="folder | image | video | camera index | picam")
     ap.add_argument("--max-frames", type=int, default=0, help="0 = all")
     ap.add_argument("--max-width", type=int, default=None,
@@ -116,12 +126,22 @@ def main() -> None:
     ap.add_argument("--save-vis", default=None, help="folder for annotated images")
     args = ap.parse_args()
 
-    client = RemoteDetector(args.server, args.timeout)
-    try:
+    if args.mode == "local":
+        from edge.local_detector import LocalDetector
+
+        client = LocalDetector(args.model, conf=args.conf or 0.25, num_threads=args.threads)
         info = client.health()
-        print(f"[uav] connected: model={info['model']} device={info['device']}")
-    except Exception as e:
-        sys.exit(f"[uav] ground station not reachable at {args.server}: {e}")
+        print(f"[uav] local mode: model={info['model']} ({info['device']}, "
+              f"input {client.imgsz}x{client.imgsz})")
+    else:
+        if not args.server:
+            ap.error("--server is required in remote mode")
+        client = RemoteDetector(args.server, args.timeout)
+        try:
+            info = client.health()
+            print(f"[uav] connected: model={info['model']} device={info['device']}")
+        except Exception as e:
+            sys.exit(f"[uav] ground station not reachable at {args.server}: {e}")
 
     if args.save_vis:
         os.makedirs(args.save_vis, exist_ok=True)
@@ -129,7 +149,10 @@ def main() -> None:
 
     rows, all_dets, rtt = [], {}, None
     period = 1.0 / args.fps if args.fps > 0 and not args.realtime else 0.0
-    setting = f"w{args.max_width or 'full'}_q{args.quality}"   # e.g. "wfull_q90", "w320_q70"
+    if args.mode == "local":                                    # e.g. "local_yolov8n_int8_320"
+        setting = "local_" + os.path.splitext(os.path.basename(args.model))[0]
+    else:                                                       # e.g. "wfull_q90", "w320_q70"
+        setting = f"w{args.max_width or 'full'}_q{args.quality}"
     if args.realtime:
         setting += "_rt"
         fps = args.fps or "video's own (30 for a folder)"
@@ -138,7 +161,7 @@ def main() -> None:
     for i, fr in enumerate(iter_frames(args.source, args.max_frames, args.realtime, args.fps)):
         t_loop = time.perf_counter()
         frame, fid = fr.image, fr.frame_id
-        if args.ping_every and i % args.ping_every == 0:
+        if args.mode == "remote" and args.ping_every and i % args.ping_every == 0:
             rtt = client.ping()
         res = client.detect(frame, fid, args.max_width, args.quality, args.conf)
         age_ms = (time.perf_counter() - fr.capture_t) * 1000.0

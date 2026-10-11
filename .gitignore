@@ -224,3 +224,7 @@ logs/
 data/
 *.pt
 .DS_Store
+
+# model export / quantisation intermediates (the final models/*.tflite IS committed)
+*.onnx
+*.npy
