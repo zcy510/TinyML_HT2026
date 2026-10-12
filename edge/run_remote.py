@@ -103,7 +103,7 @@ def main() -> None:
                     help="remote = ground station (needs --server); local = on-board INT8 "
                          "model (needs --model)")
     ap.add_argument("--server", default=None, help="e.g. http://192.168.1.50:8000")
-    ap.add_argument("--model", default="models/yolov8n_int8_320.onnx",
+    ap.add_argument("--model", default="models/yolov8n_int8_320.tflite",
                     help="INT8 model for --mode local (.onnx via onnxruntime, or .tflite)")
     ap.add_argument("--threads", type=int, default=None, help="CPU threads for --mode local")
     ap.add_argument("--source", required=True, help="folder | image | video | camera index | picam")
