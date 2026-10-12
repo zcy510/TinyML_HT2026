@@ -1,0 +1,13 @@
+# Simulated flight: the UAV flies away from the ground station and comes back.
+# Each row holds until the next one. delay = extra round-trip delay added by netem
+# (real Wi-Fi adds ~5-15 ms), rate 0 = not limited. Expected policy behaviour:
+# good -> remote_full, moderate -> remote_reduced, poor -> local.
+t_s,rssi_dbm,delay_ms,jitter_ms,loss_pct,rate_mbit
+0,-45,0,0,0,0          # next to the ground station        -> good
+12,-58,20,5,0,20       # 50 m                                -> good
+24,-66,120,15,2,8      # behind trees, RTT > 100 ms          -> moderate
+36,-72,180,20,4,4      # further away                        -> moderate
+48,-80,350,40,15,1     # edge of range                       -> poor
+60,-70,150,20,3,5      # coming back                         -> moderate
+72,-50,0,0,0,0         # back home                           -> good
+84,-50,0,0,0,0         # end

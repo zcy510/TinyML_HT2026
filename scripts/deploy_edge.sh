@@ -19,6 +19,8 @@
 #                     --max-width 320 --quality 70 --max-frames 50
 #                     --realtime [--fps 30]   replay video/sequence like a live
 #                                             camera, dropping late frames
+#                     --mode adaptive         policy engine picks remote / local per
+#                                             frame from RTT, loss, RSSI (needs model)
 #
 # Examples
 #   ./scripts/deploy_edge.sh mock                      # Pi-only smoke test
@@ -30,6 +32,8 @@
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
 #   ./scripts/deploy_edge.sh local \
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
+#   ./scripts/deploy_edge.sh 192.168.31.50 \
+#       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime --mode adaptive
 #
 # What it does: system packages (Pi only) -> .venv -> Python deps (only when
 # requirements change) -> checks the ground station -> runs the remote pipeline
@@ -49,7 +53,7 @@ die()  { printf '\033[1;31m[deploy-edge] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ arguments
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 SERVER="$1"; shift
@@ -132,9 +136,18 @@ fi
 # Runtime for the on-board INT8 model (edge mode): onnxruntime for .onnx (default),
 # ai-edge-litert for .tflite. numpy is pinned to the version already installed, so the
 # apt-built OpenCV/picamera2 keep working on the Pi.
-if [ "$LOCAL" = 1 ]; then
+MODEL_PATH="models/yolov8n_int8_320.tflite"            # edge.run_remote default
+PREV=""
+for a in ${EXTRA[@]+"${EXTRA[@]}"}; do
+  [ "$PREV" = "--model" ] && MODEL_PATH="$a"
+  PREV="$a"
+done
+NEEDS_LOCAL="$LOCAL"
+[[ " ${EXTRA[*]-} " == *" adaptive "* ]] && NEEDS_LOCAL=1  # --mode adaptive uses the local model too
+if [ "$NEEDS_LOCAL" = 1 ]; then
   NP_VER="$(python -c 'import numpy; print(numpy.__version__)')"
-  if [[ " ${EXTRA[*]-} " == *".tflite"* ]]; then
+  [ -f "$MODEL_PATH" ] || die "local model not found: $MODEL_PATH (see README, Edge mode)"
+  if [[ "$MODEL_PATH" == *.tflite ]]; then
     if ! python -c "import ai_edge_litert" 2>/dev/null && ! python -c "import tflite_runtime" 2>/dev/null; then
       say "Installing LiteRT runtime (ai-edge-litert) for the .tflite model"
       python -m pip install ai-edge-litert "numpy==$NP_VER" \

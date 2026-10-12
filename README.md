@@ -13,6 +13,9 @@ ground_station/      Remote high-complexity mode (runs on the Windows PC)
 edge/                UAV side (Raspberry Pi 5)
   frame_source.py      folder / video / camera / picam frames; --realtime camera replay
   local_detector.py    edge mode: INT8 YOLOv8n (ONNX Runtime or LiteRT) on the Pi, same interface as remote
+  link_monitor.py      background RTT / loss probes, remote-frame latency, RSSI
+  policy.py            threshold policy (plan Table 1) with hysteresis and minimum dwell time
+  adaptive.py          per-frame remote_full / remote_reduced / local selection + local fallback
   remote_client.py     JPEG encode + optional downscale, send, map boxes back, timing
   run_remote.py        CLI: any source -> server, CSV log + summary
 tools/
@@ -21,9 +24,11 @@ tools/
   make_calib_npy.py    calibration frames (.npy) for INT8 quantisation
   quantize_onnx.py     static INT8 quantisation with ONNX Runtime
   eval_detection.py    Precision / recall / F1 @ IoU vs YOLO-format labels (ignore regions, hold-last)
-  summarize_log.py     Latency / bandwidth / reliability / drop-rate table per setting
+  summarize_log.py     Latency / bandwidth / reliability / drop-rate / mode-share table per setting
+  link_emulator.py     replays a link trace with tc netem (only traffic to the ground station)
+traces/                link-quality traces (simulated flights) for the emulator
 tests/                 pytest (fake detector, no GPU needed); RUN_YOLO=1 for real model
-scripts/               Windows setup + start scripts for the ground station
+scripts/               deploy scripts; run_experiment.sh = remote vs local vs adaptive on one trace
 ```
 
 ## Status
@@ -32,8 +37,8 @@ scripts/               Windows setup + start scripts for the ground station
 |---|---|
 | Remote high-complexity detection pipeline (Oct 5-8) | Implemented |
 | Lightweight TinyML edge pipeline (Oct 9-11) | Implemented (INT8 YOLOv8n, ONNX Runtime PTQ) |
-| Link monitoring + threshold policy engine (Oct 12-15) | Planned (`/ping` RTT already in place) |
-| Integration, experiments, analysis (Oct 16-29) | Planned |
+| Link monitoring + threshold policy engine (Oct 12-15) | Implemented (RTT, loss, RSSI, remote latency; hysteresis) |
+| Integration, experiments, analysis (Oct 16-29) | Adaptive mode + trace-driven experiment script ready; experiments next |
 
 ## Quick start: one-click deploy
 
@@ -165,6 +170,61 @@ python -m edge.run_remote --mode local --source <seq> --realtime
 The log uses the same columns as remote mode (`network_ms` and `upload_bytes` are 0;
 `inference_ms` is the model run time, `encode_ms` the letterbox step), so `summarize_log`
 and `eval_detection` compare edge-only and remote runs directly.
+
+## Adaptive mode: policy engine
+
+`--mode adaptive` chooses, for every frame, between the ground station and the on-board model:
+
+| Link (any of the "poor" conditions is enough) | Mode | What is sent |
+|---|---|---|
+| good: RTT < 100 ms, loss < 5 %, RSSI > -60 dBm | `remote_full` | full frame, JPEG 90, YOLOv8s on the GS |
+| moderate: in between | `remote_reduced` | 640 px wide, JPEG 70 |
+| poor: RTT > 250 ms or loss > 10 % or RSSI < -75 dBm | `local` | nothing; INT8 YOLOv8n on the Pi |
+
+* **Measurements** (`edge/link_monitor.py`): a background thread probes `/ping` every 0.5 s
+  (also while running locally, so recovery is noticed). RTT is an EWMA, a failed probe counts
+  as a timeout. Loss = failed probes + failed remote frames in the last 5 s. RSSI comes from
+  `/proc/net/wireless` (or from the link emulator, see below).
+* **Latency rule**: RTT and RSSI do not see a bandwidth bottleneck, so if the median remote
+  end-to-end time in the last 5 s exceeds the deadline (500 ms), the policy steps down a level.
+* **Stability**: a worse link must last 1 s (`--down-hold`), a better one 3 s (`--up-hold`);
+  at least 2 s between switches (`--min-dwell`); recovery goes up one level at a time.
+* **Fallback**: a remote request that fails or times out (timeout = deadline) is processed
+  locally straight away, so every frame still gets a result (`--no-fallback` to disable).
+* All thresholds are flags (`--rtt-good --rtt-poor --loss-good --loss-poor --rssi-good
+  --rssi-poor`, `--no-rssi`, `--policy-modes remote_full,local` for a 2-level policy).
+
+```bash
+./scripts/deploy_edge.sh <GS-IP> data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime --mode adaptive
+```
+
+Extra log columns (all modes): `mode`, `fallback`, `switch` (reason, on the frame where the
+mode changed), `link_rtt_ms`, `link_loss`, `link_e2e_ms`, `rssi_dbm`. `summarize_log` adds
+the share of frames per mode, the number of switches and fallbacks, and the upload Mbit/s.
+
+## Experiments: remote vs local vs adaptive on an emulated link
+
+`tools/link_emulator.py` replays a trace (`traces/*.csv`: time, RSSI, delay, jitter, loss,
+bandwidth) with `tc netem` on the Pi, shaping **only traffic to the ground station** (SSH keeps
+working). netem cannot change the real Wi-Fi signal, so the trace RSSI is written to
+`/tmp/uav_link_rssi`, which the link monitor uses instead while it is fresh.
+`scripts/run_experiment.sh` runs all three strategies on the same sequence and trace and writes
+`logs/exp_<trace>_<time>/summary.txt`:
+
+```bash
+./scripts/run_experiment.sh <GS-IP> data/VisDrone2019-VID-val/sequences/uav0000086_00000_v \
+    traces/fly_away_and_back.csv            # needs sudo for tc; ~3 x 84 s
+```
+
+| Trace | What it tests |
+|---|---|
+| `fly_away_and_back.csv` (84 s) | good -> moderate -> poor -> moderate -> good, all metrics change together |
+| `flaky_border.csv` (40 s) | RTT crossing the good/moderate border every 2 s: hysteresis must prevent flapping |
+| `bandwidth_drop.csv` (65 s) | RSSI and RTT stay good, upload bandwidth collapses: only the latency rule reacts |
+
+The sequence is looped (`--loop`) and the run stopped after the trace length (`--max-seconds`);
+`eval_detection` scores looped runs per repetition. Note: shaping acts on the Pi's outgoing
+packets, so `delay_ms` is added once per round trip and `rate_mbit` limits the upload.
 
 ## 3. Evaluation
 

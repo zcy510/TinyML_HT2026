@@ -72,7 +72,8 @@ class _RealtimeClock:
 
 
 def _iter_folder(files: List[Path], max_frames: int, realtime: bool,
-                 fps: float) -> Iterator[Frame]:
+                 fps: float, ids: Optional[List[str]] = None) -> Iterator[Frame]:
+    ids = ids or [f.stem for f in files]
     n = 0
     if not realtime:
         for i, f in enumerate(files):
@@ -81,7 +82,7 @@ def _iter_folder(files: List[Path], max_frames: int, realtime: bool,
             img = cv2.imread(str(f))
             if img is not None:
                 n += 1
-                yield Frame(f.stem, img, i, 0, time.perf_counter())
+                yield Frame(ids[i], img, i, 0, time.perf_counter())
         return
     clock, last = _RealtimeClock(fps), -1
     while not max_frames or n < max_frames:
@@ -93,7 +94,7 @@ def _iter_folder(files: List[Path], max_frames: int, realtime: bool,
         if img is None:
             continue
         n += 1
-        yield Frame(files[idx].stem, img, idx, idx - last - 1, clock.capture_time(idx))
+        yield Frame(ids[idx], img, idx, idx - last - 1, clock.capture_time(idx))
         last = idx
 
 
@@ -158,18 +159,28 @@ def _iter_camera(source: str, max_frames: int) -> Iterator[Frame]:
         cap.release()
 
 
+def loop_id(frame_id: str, k: int) -> str:
+    """Frame id in the k-th repetition of a looped source: '0000001', '0000001#1', ..."""
+    return frame_id if k == 0 else f"{frame_id}#{k}"
+
+
 def iter_frames(source: str, max_frames: int = 0, realtime: bool = False,
-                fps: float = 0.0) -> Iterator[Frame]:
+                fps: float = 0.0, loop: int = 1) -> Iterator[Frame]:
     """Yield :class:`Frame` objects from a folder (sorted by name = an image
     sequence), a single image, a video file, a camera index or ``'picam'``.
 
     ``realtime`` / ``fps`` apply to folders and video files (see module doc);
     ``fps=0`` means: the video's own frame rate, or 30 fps for a folder.
     Live cameras are real-time by nature and ignore both.
+    ``loop`` plays a folder or video N times (longer experiments); frame ids of the k-th
+    repetition get a ``#k`` suffix (see loop_id), which tools.eval_detection understands.
     """
     p = Path(source)
     if p.is_dir():
-        yield from _iter_folder(list_images(p), max_frames, realtime, fps or DEFAULT_SEQ_FPS)
+        files = list_images(p)
+        loop = max(1, loop)
+        yield from _iter_folder(files * loop, max_frames, realtime, fps or DEFAULT_SEQ_FPS,
+                                [loop_id(f.stem, k) for k in range(loop) for f in files])
     elif p.is_file() and p.suffix.lower() in IMG_EXT:
         img = cv2.imread(str(p))
         if img is None:
@@ -178,4 +189,9 @@ def iter_frames(source: str, max_frames: int = 0, realtime: bool = False,
     elif source == "picam" or source.isdigit():
         yield from _iter_camera(source, max_frames)
     else:
-        yield from _iter_video(source, max_frames, realtime, fps)
+        n = 0
+        for k in range(max(1, loop)):
+            for fr in _iter_video(source, max_frames - n if max_frames else 0, realtime, fps):
+                fr.frame_id = loop_id(fr.frame_id, k)
+                n += 1
+                yield fr

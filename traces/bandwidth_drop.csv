@@ -1,0 +1,10 @@
+# Signal and RTT stay good, but upload bandwidth collapses (e.g. channel congestion).
+# RSSI/RTT alone would keep sending full frames; the policy's latency rule
+# (remote e2e > deadline) has to step down. Expected: remote_full -> remote_reduced
+# (-> local if even reduced frames miss the deadline) -> back up.
+t_s,rssi_dbm,delay_ms,jitter_ms,loss_pct,rate_mbit
+0,-50,10,2,0,0
+15,-52,20,5,0,1.5
+35,-52,20,5,0,0.4
+50,-50,10,2,0,0
+65,-50,10,2,0,0

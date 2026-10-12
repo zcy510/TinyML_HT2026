@@ -95,11 +95,36 @@ def _frame_list(images: Optional[Path], labels: Path) -> List[Tuple[str, Optiona
 def evaluate(pred: Dict[str, List[dict]], images: Optional[Path], labels: Path,
              iou_thr: float = 0.5, min_conf: float = 0.0, classes: Optional[Set[int]] = None,
              hold_last: bool = False, img_size: Optional[Tuple[int, int]] = None) -> dict:
+    """Looped runs (--loop: ids '0000001#2') are scored per repetition and summed."""
+    if any("#" in k for k in pred):
+        loops: Dict[int, Dict[str, List[dict]]] = {}
+        for k, v in pred.items():
+            stem, _, rep = k.partition("#")
+            loops.setdefault(int(rep or 0), {})[stem] = v
+        reps = [p for _, p in sorted(loops.items())]
+        # the last repetition of a looped run usually stops part-way (--max-seconds):
+        # score it only up to its last processed frame
+        parts = [_evaluate_once(p, images, labels, iou_thr, min_conf, classes, hold_last, img_size,
+                                truncate=(i == len(reps) - 1)) for i, p in enumerate(reps)]
+        tot = {k: sum(r[k] for r in parts) for k in ("frames", "frames_held", "tp", "fp", "fn")}
+        P = tot["tp"] / (tot["tp"] + tot["fp"]) if tot["tp"] + tot["fp"] else 0.0
+        R = tot["tp"] / (tot["tp"] + tot["fn"]) if tot["tp"] + tot["fn"] else 0.0
+        return {**tot, "precision": P, "recall": R, "f1": 2 * P * R / (P + R) if P + R else 0.0,
+                "iou_threshold": iou_thr, "repetitions": len(parts)}
+    return _evaluate_once(pred, images, labels, iou_thr, min_conf, classes, hold_last, img_size)
+
+
+def _evaluate_once(pred, images, labels, iou_thr, min_conf, classes, hold_last, img_size,
+                   truncate: bool = False) -> dict:
     TP = FP = FN = 0
     frames = held = 0
     last: Optional[List[dict]] = None
     size = img_size
-    for stem, img_path in _frame_list(images, labels):
+    frame_list = _frame_list(images, labels)
+    if truncate:
+        last = max((i for i, (stem, _) in enumerate(frame_list) if stem in pred), default=-1)
+        frame_list = frame_list[: last + 1]
+    for stem, img_path in frame_list:
         dets = pred.get(stem)
         if dets is None:
             if not hold_last or last is None:

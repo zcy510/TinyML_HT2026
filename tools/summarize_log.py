@@ -39,7 +39,22 @@ def summarize(df: pd.DataFrame, deadline_ms: float) -> pd.DataFrame:
         out["drop_rate"] = dropped / (dropped + out["frames"])
         out["age_mean"] = g["age_ms"].mean()
         out["age_p95"] = g["age_ms"].quantile(0.95)
+    if "mode" in df.columns:             # logs with link monitor / adaptive policy
+        for m in ("remote", "remote_full", "remote_reduced", "local"):
+            share = df.assign(_m=df["mode"] == m).groupby("res")["_m"].mean()
+            if share.any():
+                out[f"%{m}"] = share
+        out["switches"] = df.groupby("res")["switch"].apply(lambda x: x.fillna("").astype(str).ne("").sum())
+        out["fallbacks"] = df.groupby("res")["fallback"].apply(
+            lambda x: x.astype(str).str.lower().eq("true").sum())
+        out["upload_mbit_s"] = (df.groupby("res")["upload_bytes"].sum() * 8 / 1e6
+                                / df.groupby("res")["timestamp"].apply(_duration_s))
     return out.round(2)
+
+
+def _duration_s(ts: pd.Series) -> float:
+    t = pd.to_datetime(ts)
+    return max((t.max() - t.min()).total_seconds(), 1e-3)
 
 
 def main() -> None:
@@ -48,7 +63,7 @@ def main() -> None:
     ap.add_argument("--deadline-ms", type=float, default=500.0)
     args = ap.parse_args()
     df = pd.concat([pd.read_csv(p) for p in args.logs], ignore_index=True)
-    with pd.option_context("display.width", 200, "display.max_columns", 20):
+    with pd.option_context("display.width", 250, "display.max_columns", 30):
         print(summarize(df, args.deadline_ms))
 
 

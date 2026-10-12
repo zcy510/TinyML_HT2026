@@ -1,0 +1,25 @@
+# Link that keeps crossing the good/moderate border (RTT ~70 vs ~140 ms) every 2 s.
+# Without hysteresis the policy would switch every 2 s; with it, it should stay put
+# (the 'better' state never lasts the 3 s up-hold).
+t_s,rssi_dbm,delay_ms,jitter_ms,loss_pct,rate_mbit
+0,-55,60,5,0,20
+2,-63,130,10,1,10
+4,-55,60,5,0,20
+6,-63,130,10,1,10
+8,-55,60,5,0,20
+10,-63,130,10,1,10
+12,-55,60,5,0,20
+14,-63,130,10,1,10
+16,-55,60,5,0,20
+18,-63,130,10,1,10
+20,-55,60,5,0,20
+22,-63,130,10,1,10
+24,-55,60,5,0,20
+26,-63,130,10,1,10
+28,-55,60,5,0,20
+30,-63,130,10,1,10
+32,-55,60,5,0,20
+34,-63,130,10,1,10
+36,-55,60,5,0,20
+38,-63,130,10,1,10
+40,-55,60,5,0,20
