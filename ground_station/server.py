@@ -13,6 +13,7 @@ POST /detect   -> run detection. Body: raw image bytes (Content-Type: image/jpeg
 
 Run (Windows, from the repo root):
     python -m ground_station.server --host 0.0.0.0 --port 8000 --weights yolov8s.pt
+    ... --demo http://<Mac-IP>:8100     # also report to the live demo dashboard (demo/server.py)
 """
 from __future__ import annotations
 
@@ -62,9 +63,10 @@ def decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-def create_app(detector, log_path: Optional[str] = None) -> FastAPI:
+def create_app(detector, log_path: Optional[str] = None, demo=None) -> FastAPI:
     """Build the FastAPI app. `detector` needs .detect(img, conf=, imgsz=),
-    .model_name and .device (a fake detector is injected in the unit tests)."""
+    .model_name and .device (a fake detector is injected in the unit tests).
+    `demo`: optional ground_station.demo_push.GSReporter (live demo dashboard)."""
     app = FastAPI(title="UAV Ground Station - Remote Detection")
     logger = CsvLogger(log_path)
     stats = {"frames": 0, "started": time.time()}
@@ -115,7 +117,7 @@ def create_app(detector, log_path: Optional[str] = None) -> FastAPI:
         stats["frames"] += 1
 
         h, w = img.shape[:2]
-        logger.log({
+        row = {
             "timestamp": datetime.now().isoformat(timespec="milliseconds"),
             "frame_id": frame_id or "",
             "client": request.client.host if request.client else "",
@@ -126,13 +128,17 @@ def create_app(detector, log_path: Optional[str] = None) -> FastAPI:
             "inference_ms": round(result.inference_ms, 2),
             "server_ms": round(server_ms, 2),
             "model": result.model_name, "device": result.device,
-        })
+        }
+        logger.log(row)
+        dets = [d.to_dict() for d in result.detections]
+        if demo is not None:
+            demo.frame(row, dets)
         return JSONResponse({
             "frame_id": frame_id,
             "model": result.model_name,
             "device": result.device,
             "image_size": [w, h],
-            "detections": [d.to_dict() for d in result.detections],
+            "detections": dets,
             "timing": {
                 "decode_ms": round(decode_ms, 2),
                 "inference_ms": round(result.inference_ms, 2),
@@ -154,6 +160,8 @@ def main() -> None:
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--half", action="store_true", help="FP16 inference on CUDA")
     p.add_argument("--log", default="logs/server_log.csv")
+    p.add_argument("--demo", default=None, metavar="URL",
+                   help="live demo dashboard to report to, e.g. http://192.168.1.20:8100")
     args = p.parse_args()
 
     import uvicorn
@@ -164,7 +172,12 @@ def main() -> None:
     det = YoloDetector(args.weights, args.device, args.imgsz, args.conf, half=args.half)
     det.warmup()
     print(f"[ground-station] model ready on {det.device}; listening on {args.host}:{args.port}")
-    uvicorn.run(create_app(det, args.log), host=args.host, port=args.port, log_level="warning")
+    demo = None
+    if args.demo:
+        from ground_station.demo_push import GSReporter
+
+        demo = GSReporter(args.demo, det.model_name, str(det.device)).start()
+    uvicorn.run(create_app(det, args.log, demo), host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

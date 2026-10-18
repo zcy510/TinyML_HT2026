@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UAV Link Demo</title>
+<style>
+:root {
+  --bg: #0a0e13; --panel: #11171f; --panel2: #161e28; --line: #222c39; --line2: #2c3847;
+  --text: #e7edf4; --muted: #8796a8; --faint: #5b6878;
+  --full: #34d399; --reduced: #fbbf24; --local: #8b9cff; --bad: #f87171; --accent: #38bdf8;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans); }
+body { min-height: 100vh; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+header h1 span { color: var(--muted); font-weight: 400; }
+.live { display: inline-flex; align-items: center; gap: 6px; font: 600 11px var(--mono); letter-spacing: 1px;
+  color: var(--bad); border: 1px solid #5a2630; padding: 3px 8px; border-radius: 4px; }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); animation: blink 1.2s infinite; }
+.live.off { color: var(--faint); border-color: var(--line2); } .live.off i { background: var(--faint); animation: none; }
+@keyframes blink { 50% { opacity: .25; } }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pill b { color: var(--text); font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.dot.on { background: var(--full); box-shadow: 0 0 0 3px rgba(52,211,153,.15); }
+.dot.warn { background: var(--reduced); }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 14px; padding: 14px 20px 16px; height: calc(100vh - 55px); min-height: 640px; }
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; }
+.col.right { overflow-y: auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.card > h2 { margin: 0; padding: 10px 14px; font-size: 11px; font-weight: 600; letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.card > h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
+.body { padding: 10px 14px; }
+
+/* video */
+.video { position: relative; flex: 1 1 auto; min-height: 260px; background: #05080b; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.video canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hud { position: absolute; pointer-events: none; }
+.hud.tl { top: 14px; left: 14px; }
+.hud.tr { top: 14px; right: 14px; text-align: right; }
+.hud.bl { bottom: 12px; left: 14px; }
+.hud.br { bottom: 12px; right: 14px; text-align: right; }
+.badge { display: inline-flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 8px;
+  background: rgba(8,12,16,.78); border: 1px solid var(--line2); backdrop-filter: blur(6px); border-left: 4px solid var(--faint); }
+.badge .m { font: 700 18px var(--sans); letter-spacing: .6px; }
+.badge .s { font-size: 12px; color: var(--muted); }
+.bigfps { background: rgba(8,12,16,.78); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 12px; backdrop-filter: blur(6px); }
+.bigfps .v { font: 700 30px/1.1 var(--mono); }
+.bigfps .u { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+.chip { display: inline-block; background: rgba(8,12,16,.78); border: 1px solid var(--line2); border-radius: 6px;
+  padding: 4px 8px; font: 12px var(--mono); color: var(--muted); margin-right: 6px; }
+.chip b { color: var(--text); font-weight: 600; }
+.flash { position: absolute; inset: 0; border: 3px solid var(--bad); border-radius: 10px; opacity: 0; transition: opacity .4s; pointer-events: none; }
+.flash.show { opacity: 1; transition: none; }
+.fbtag { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #1a0508;
+  font: 700 12px var(--mono); padding: 4px 10px; border-radius: 4px; letter-spacing: 1px; opacity: 0; transition: opacity .6s; }
+.fbtag.show { opacity: 1; transition: none; }
+.nosig { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px;
+  color: var(--muted); font-size: 14px; text-align: center; padding: 20px; }
+.nosig code { font: 12px var(--mono); color: var(--text); background: var(--panel2); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); max-width: 100%; overflow-wrap: anywhere; }
+
+/* kpis */
+.kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.kpi { background: var(--panel); padding: 10px 12px; min-width: 0; }
+.kpi .l { font-size: 11px; color: var(--muted); letter-spacing: .4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi .v { font: 600 22px/1.25 var(--mono); white-space: nowrap; }
+.kpi .v small { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 2px; }
+.kpi .d { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* charts */
+.charts { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+.chart { position: relative; height: 100px; }
+.chart canvas { width: 100%; height: 100%; display: block; }
+.legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); padding: 2px 4px 4px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.legend i.band { height: 8px; width: 8px; border-radius: 2px; }
+
+/* topology */
+.topo { display: grid; grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr); align-items: center; padding: 12px 14px 6px; }
+.wirelbl { font: 11px var(--mono); color: var(--muted); text-align: center; padding: 0 14px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wirelbl b { color: var(--text); }
+.node { border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; background: var(--panel2); transition: border-color .3s, box-shadow .3s; min-width: 0; }
+.node .t { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.node .n { font-weight: 600; font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .x { font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
+.node .inf { display: none; font: 700 9px var(--mono); letter-spacing: 1px; color: #04121a; background: var(--accent); border-radius: 3px; padding: 1px 5px; margin-left: auto; }
+.node.active .inf { display: inline-block; }
+.wire { height: 40px; display: flex; align-items: center; }
+.wire svg { width: 100%; height: 14px; overflow: visible; }
+@keyframes flow { to { stroke-dashoffset: -20; } }
+.wire line.flow { animation: flow .6s linear infinite; }
+
+/* policy */
+.pmode { display: flex; align-items: baseline; gap: 10px; }
+.pmode .v { font: 700 24px var(--sans); letter-spacing: .5px; }
+.pmode .w { color: var(--muted); font-size: 12px; }
+.reason { margin-top: 6px; font: 12px var(--mono); color: var(--muted); min-height: 18px; }
+.reason b { color: var(--text); font-weight: 600; }
+.pend { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 5px; border: 1px solid var(--line); }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
+.share { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin-top: 12px; background: var(--panel2); }
+.share i { display: block; height: 100%; transition: width .4s; }
+.sharel { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted); margin-top: 5px; gap: 8px; }
+.sharel span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+.counters { display: flex; gap: 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.counters b { color: var(--text); font-family: var(--mono); }
+
+/* link emulator */
+.lrow { display: grid; grid-template-columns: 22px 78px 1fr 30px 30px 88px; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; }
+.lrow.sel { background: var(--panel2); border-color: var(--accent); }
+.lrow .k { font: 11px var(--mono); color: var(--faint); text-align: center; border: 1px solid var(--line2); border-radius: 4px; line-height: 18px; }
+.lrow.sel .k { color: var(--accent); border-color: var(--accent); }
+.lrow .nm { font-size: 13px; }
+.lrow .nm small { display: block; font-size: 10px; color: var(--faint); }
+.inp { display: flex; align-items: center; background: #0b1016; border: 1px solid var(--line2); border-radius: 6px; padding: 0 8px; height: 32px; min-width: 0; }
+.inp input { flex: 1; min-width: 0; width: 100%; background: transparent; border: 0; color: var(--text); font: 600 15px var(--mono); outline: none; text-align: right; }
+.inp input::placeholder { color: var(--faint); font-weight: 400; }
+.inp span { font-size: 11px; color: var(--muted); margin-left: 6px; white-space: nowrap; }
+.inp:focus-within { border-color: var(--accent); }
+.inp input::-webkit-outer-spin-button, .inp input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.inp input[type=number] { -moz-appearance: textfield; }
+button { font: 600 12px var(--sans); color: var(--text); background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; height: 30px; cursor: pointer; padding: 0 10px; }
+button:hover { border-color: var(--accent); }
+button:active { transform: translateY(1px); }
+button.sq { width: 30px; padding: 0; font: 600 16px var(--mono); }
+.meas { font: 11px var(--mono); color: var(--muted); text-align: right; line-height: 1.25; }
+.meas b { display: block; color: var(--text); font-size: 13px; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.presets button kbd { font: 10px var(--mono); color: var(--faint); margin-left: 6px; }
+.presets button[data-p=good] { box-shadow: inset 3px 0 0 var(--full); }
+.presets button[data-p=moderate] { box-shadow: inset 3px 0 0 var(--reduced); }
+.presets button[data-p=poor] { box-shadow: inset 3px 0 0 var(--bad); }
+.presets button[data-p=gs_down] { box-shadow: inset 3px 0 0 #7f1d1d; }
+.trace { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+select { flex: 1; min-width: 0; height: 30px; background: #0b1016; color: var(--text); border: 1px solid var(--line2); border-radius: 6px; font: 12px var(--mono); padding: 0 6px; }
+.tprog { margin-top: 6px; font: 11px var(--mono); color: var(--muted); display: none; }
+.tprog.on { display: block; }
+.keys { margin-top: 10px; font-size: 11px; color: var(--faint); line-height: 1.7; }
+kbd { font: 10px var(--mono); border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; color: var(--muted); background: var(--panel2); }
+.by { font-size: 11px; color: var(--faint); }
+
+/* log */
+.log { max-height: 220px; min-height: 60px; overflow-y: auto; font: 12px/1.5 var(--mono); padding: 8px 14px; }
+.log div { display: flex; gap: 8px; color: var(--muted); }
+.log div time { color: var(--faint); flex: none; }
+.log div.sw { color: var(--text); }
+.log div.fb { color: var(--bad); }
+.log div.ln { color: var(--accent); }
+.empty { color: var(--faint); font-size: 12px; }
+
+@media (max-width: 1180px), (max-height: 600px) {
+  main { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .col.right { overflow: visible; }
+  .video { flex: none; aspect-ratio: 16 / 9; min-height: 0; }
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  header { flex-wrap: wrap; padding: 10px 16px; }
+  main { padding: 12px 16px; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lrow { grid-template-columns: 22px 64px 1fr 30px 30px; }
+  .lrow .meas { display: none; }
+  .topo { grid-template-columns: 1fr; }
+  .badge .m { font-size: 14px; } .bigfps .v { font-size: 22px; }
+  .hud.br, .badge .s { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="live off" id="live"><i></i>LIVE</span>
+  <h1>Adaptive Edge Processing for UAVs <span>· link-aware inference demo</span></h1>
+  <div class="spacer"></div>
+  <span class="pill"><span class="dot" id="dotEdge"></span>UAV <b id="pillEdge">offline</b></span>
+  <span class="pill"><span class="dot" id="dotGs"></span>Ground station <b id="pillGs">—</b></span>
+</header>
+
+<main>
+  <div class="col">
+    <div class="video" id="video">
+      <canvas id="vc"></canvas>
+      <div class="nosig" id="nosig">
+        <div>Waiting for the UAV…</div>
+        <code id="hint">python -m edge.run_remote --mode adaptive --server http://&lt;GS&gt;:8000 --demo http://&lt;this-Mac&gt;:8100 --source data/uav0000117_02622_v --realtime --loop 100</code>
+      </div>
+      <div class="hud tl"><div class="badge" id="badge"><span class="m" id="bm">—</span><span class="s" id="bs">no frames yet</span></div></div>
+      <div class="hud tr"><div class="bigfps"><div class="v" id="hudFps">—</div><div class="u">fps processed</div></div></div>
+      <div class="hud bl"><span class="chip">frame <b id="hudFrame">—</b></span><span class="chip">tracks <b id="hudTracks">0</b></span><span class="chip">age <b id="hudAge">—</b></span></div>
+      <div class="hud br"><span class="chip" id="hudSrc">—</span></div>
+      <div class="fbtag" id="fbtag">FALLBACK → ON-BOARD</div>
+      <div class="flash" id="flash"></div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="l">Processed FPS</div><div class="v" id="kFps">—</div><div class="d" id="kFpsD">camera —</div></div>
+      <div class="kpi"><div class="l">End-to-end latency</div><div class="v" id="kE2e">—</div><div class="d" id="kE2eD">p50, last 2 s</div></div>
+      <div class="kpi"><div class="l">Result age</div><div class="v" id="kAge">—</div><div class="d">capture → result</div></div>
+      <div class="kpi"><div class="l">Inference</div><div class="v" id="kInf">—</div><div class="d" id="kInfD">—</div></div>
+      <div class="kpi"><div class="l">Uplink</div><div class="v" id="kUp">—</div><div class="d" id="kUpD">— KB / frame</div></div>
+      <div class="kpi"><div class="l">Frames dropped</div><div class="v" id="kDrop">—</div><div class="d" id="kDropD">last 5 s</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Last 60 seconds <span class="r" id="chartNote"></span></h2>
+      <div class="charts">
+        <div class="legend">
+          <span><i class="band" style="background:var(--full)"></i>remote · full</span>
+          <span><i class="band" style="background:var(--reduced)"></i>remote · reduced</span>
+          <span><i class="band" style="background:var(--local)"></i>on-board</span>
+          <span><i style="background:var(--accent)"></i>measured RTT</span>
+          <span><i style="background:#5b6878"></i>emulated delay</span>
+          <span><i style="background:#e7edf4"></i>end-to-end latency</span>
+        </div>
+        <div class="chart"><canvas id="c1"></canvas></div>
+        <div class="chart"><canvas id="c2"></canvas></div>
+        <div class="chart"><canvas id="c3"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col right">
+    <div class="card">
+      <h2>Topology</h2>
+      <div class="topo">
+        <div class="node" id="nUav"><div class="t"><span class="dot" id="dotEdge2"></span>UAV<span class="inf">INFERENCE</span></div><div class="n" id="nUavN">—</div><div class="x" id="nUavX">—</div></div>
+        <div class="wire">
+          <svg viewBox="0 0 100 14" preserveAspectRatio="none"><line id="wireL" x1="4" y1="7" x2="96" y2="7" stroke="#2c3847" stroke-width="2" stroke-dasharray="6 4"/></svg>
+        </div>
+        <div class="node" id="nGs"><div class="t"><span class="dot" id="dotGs2"></span>Ground stn<span class="inf">INFERENCE</span></div><div class="n" id="nGsN">—</div><div class="x" id="nGsX">—</div></div>
+      </div>
+      <div class="wirelbl" id="wireLbl">—</div>
+    </div>
+
+    <div class="card">
+      <h2>Inference policy engine</h2>
+      <div class="body">
+        <div class="by" id="polCfg" style="margin-bottom:6px"></div>
+        <div class="pmode"><span class="v" id="pMode">—</span><span class="w" id="pWhere"></span></div>
+        <div class="reason" id="pReason">—</div>
+        <div class="pend" id="pPend">&nbsp;<div class="bar"><i id="pBar"></i></div></div>
+        <div class="share" id="share"></div>
+        <div class="sharel" id="sharel"></div>
+        <div class="counters"><span>switches <b id="cSw">0</b></span><span>fallbacks <b id="cFb">0</b></span><span>frames <b id="cFr">0</b></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Link emulator <span class="r" id="linkBy">UAV ⇄ ground station</span></h2>
+      <div class="body">
+        <div id="rows"></div>
+        <div class="presets" id="presets">
+          <button data-p="good">Good<kbd>G</kbd></button>
+          <button data-p="moderate">Moderate<kbd>M</kbd></button>
+          <button data-p="poor">Poor<kbd>P</kbd></button>
+          <button data-p="gs_down">GS down<kbd>X</kbd></button>
+          <button data-p="real">Reset<kbd>R</kbd></button>
+        </div>
+        <div class="trace">
+          <select id="traceSel"></select>
+          <button id="traceBtn">▶ Play trace<kbd style="margin-left:6px">T</kbd></button>
+        </div>
+        <div class="tprog" id="tprog"></div>
+        <div class="keys">
+          <kbd>↑</kbd><kbd>↓</kbd> change · <kbd>Shift</kbd> ×5 · <kbd>←</kbd><kbd>→</kbd> / <kbd>1</kbd>–<kbd>5</kbd> select · <kbd>Enter</kbd> type a value.
+          Applied by the UAV to its real traffic to the ground station; the policy only sees what it measures.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Events</h2>
+      <div class="log" id="log"><div class="empty">Mode switches, fallbacks and link changes appear here.</div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MODE = {
+  remote_full:    { c: "#34d399", m: "REMOTE · FULL RES", short: "remote full" },
+  remote_reduced: { c: "#fbbf24", m: "REMOTE · REDUCED",  short: "remote reduced" },
+  local:          { c: "#8b9cff", m: "ON-BOARD",          short: "on-board" },
+  remote:         { c: "#34d399", m: "REMOTE (fixed)",    short: "remote" },
+};
+const modeOf = m => MODE[m] || { c: "#5b6878", m: (m || "—").toUpperCase(), short: m || "—" };
+const METRICS = [
+  { key: "delay_ms",  name: "Delay",     sub: "extra RTT",   unit: "ms",     step: 25, min: 0, max: 3000 },
+  { key: "jitter_ms", name: "Jitter",    sub: "± per req.",  unit: "ms",     step: 5,  min: 0, max: 1000 },
+  { key: "loss_pct",  name: "Loss",      sub: "requests",    unit: "%",      step: 1,  min: 0, max: 100 },
+  { key: "rate_mbit", name: "Bandwidth", sub: "uplink",      unit: "Mbit/s", ladder: [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 0] },
+  { key: "rssi_dbm",  name: "RSSI",      sub: "signal",      unit: "dBm",    step: 2,  min: -100, max: -30, nullable: true },
+];
+const S = {
+  hello: null, link: {}, presets: {}, traces: [], trace: null, gs: null,
+  edgeOnline: false, gsOnline: false, frames: [], sel: 0, tracks: [], img: null, imgFrame: null,
+  last: null, switches: 0, fallbacks: 0, total: 0, prevMode: null, lastFbLog: 0, fbPending: 0,
+};
+
+// ------------------------------------------------------------------ helpers
+const fmt = (v, d = 0) => (v == null || !isFinite(v)) ? "—" : Number(v).toFixed(d);
+const pct = (a) => { a = a.slice().sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+const clock = () => new Date().toLocaleTimeString([], { hour12: false });
+function post(path, body) {
+  return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => r.json()).catch(() => null);
+}
+function log(text, cls = "") {
+  const el = $("log");
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  const d = document.createElement("div");
+  d.className = cls;
+  d.innerHTML = `<time>${clock()}</time><span></span>`;
+  d.lastChild.textContent = text;
+  el.prepend(d);
+  while (el.children.length > 80) el.lastChild.remove();
+}
+
+// ------------------------------------------------------------- link controls
+function buildRows() {
+  const rows = $("rows");
+  rows.innerHTML = "";
+  METRICS.forEach((m, i) => {
+    const r = document.createElement("div");
+    r.className = "lrow"; r.dataset.i = i;
+    r.innerHTML = `<span class="k">${i + 1}</span>
+      <span class="nm">${m.name}<small>${m.sub}</small></span>
+      <label class="inp"><input type="number" id="in_${m.key}" step="${m.step || 0.25}" placeholder="${m.nullable ? "real" : (m.ladder ? "∞" : "0")}"><span>${m.unit}</span></label>
+      <button class="sq" data-d="-1">−</button><button class="sq" data-d="1">+</button>
+      <span class="meas" id="me_${m.key}"></span>`;
+    r.addEventListener("mousedown", () => select(i));
+    r.querySelectorAll("button").forEach(b => b.addEventListener("click", e => { e.preventDefault(); select(i); adjust(+b.dataset.d, e.shiftKey); }));
+    const inp = r.querySelector("input");
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { commitInput(m, inp); inp.blur(); }
+      if (e.key === "Escape") { inp.blur(); renderLink(); }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); adjust(e.key === "ArrowUp" ? 1 : -1, e.shiftKey); }
+    });
+    inp.addEventListener("blur", () => commitInput(m, inp));
+    rows.appendChild(r);
+  });
+  select(0);
+}
+function commitInput(m, inp) {
+  const raw = inp.value.trim();
+  let v = raw === "" ? (m.nullable ? null : 0) : Number(raw);
+  if (v !== null && !isFinite(v)) return renderLink();
+  if (v !== null && m.min != null) v = Math.max(m.min, Math.min(m.max, v));
+  if (v === (S.link[m.key] ?? null)) return renderLink();
+  sendLink({ [m.key]: v });
+}
+function select(i) {
+  S.sel = (i + METRICS.length) % METRICS.length;
+  document.querySelectorAll(".lrow").forEach((r, k) => r.classList.toggle("sel", k === S.sel));
+}
+function adjust(dir, big) {
+  const m = METRICS[S.sel];
+  let v = S.link[m.key];
+  if (m.ladder) {
+    const L = m.ladder;                                       // 0 (= unlimited) is the top
+    let idx = (v == null || v === 0) ? L.length - 1
+      : L.reduce((b, x, k) => (x && Math.abs(x - v) < Math.abs(L[b] - v) ? k : b), 0);
+    idx = Math.max(0, Math.min(L.length - 1, idx + dir * (big ? 3 : 1)));
+    v = L[idx];
+  } else {
+    if (v == null) v = m.nullable ? -50 : 0;
+    else v = v + dir * m.step * (big ? 5 : 1);
+    v = Math.max(m.min, Math.min(m.max, Math.round(v * 100) / 100));
+  }
+  sendLink({ [m.key]: v });
+}
+function sendLink(d) {
+  Object.assign(S.link, d);
+  renderLink();
+  post("/api/link", d).then(r => { if (r && r.link) { S.link = r.link; renderLink(); } });
+}
+function renderLink() {
+  for (const m of METRICS) {
+    const inp = $("in_" + m.key);
+    if (document.activeElement === inp) continue;
+    const v = S.link[m.key];
+    inp.value = (v == null || (m.ladder && v === 0)) ? "" : String(v);
+  }
+  const by = S.trace ? `trace ${S.trace.name}` : (S.linkBy === "user" ? "set by you" : "UAV ⇄ ground station");
+  $("linkBy").textContent = by;
+}
+function renderMeasured(f) {
+  const L = f ? f.link || {} : {};
+  const set = (k, label, val) => { $("me_" + k).innerHTML = val == null ? "" : `<b>${val}</b>${label}`; };
+  set("delay_ms", "RTT measured", L.rtt_ms == null ? null : fmt(L.rtt_ms) + " ms");
+  set("jitter_ms", "remote e2e", L.frame_e2e_ms == null ? null : fmt(L.frame_e2e_ms) + " ms");
+  set("loss_pct", "loss measured", L.loss == null ? null : fmt(L.loss * 100) + " %");
+  const up = upMbit();
+  set("rate_mbit", "uplink used", up == null ? null : fmt(up, 1) + " Mb/s");
+  set("rssi_dbm", "RSSI seen", L.rssi_dbm == null ? "n/a" : fmt(L.rssi_dbm) + " dBm");
+}
+
+document.querySelectorAll("#presets button").forEach(b => b.addEventListener("click", () => applyPreset(b.dataset.p)));
+function applyPreset(p) {
+  post("/api/link", { preset: p }).then(r => { if (r && r.link) { S.link = r.link; renderLink(); } });
+  log(`link preset: ${p.replace("_", " ")}`, "ln");
+}
+$("traceBtn").addEventListener("click", toggleTrace);
+function toggleTrace() {
+  if (S.trace) post("/api/trace", { stop: true });
+  else if ($("traceSel").value) post("/api/trace", { name: $("traceSel").value }).then(r => {
+    if (r && r.name) { S.trace = { name: r.name, duration_s: r.duration_s, elapsed_s: 0 }; renderTrace(); log(`trace ${r.name} started (${fmt(r.duration_s)} s)`, "ln"); }
+  });
+}
+function renderTrace() {
+  $("traceBtn").firstChild.textContent = S.trace ? "■ Stop trace" : "▶ Play trace";
+  const tp = $("tprog");
+  tp.classList.toggle("on", !!S.trace);
+  if (S.trace) tp.textContent = `playing ${S.trace.name}: ${fmt(S.trace.elapsed_s)} / ${fmt(S.trace.duration_s)} s`;
+  renderLink();
+}
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === "ArrowUp" || k === "ArrowDown") { e.preventDefault(); adjust(k === "ArrowUp" ? 1 : -1, e.shiftKey); }
+  else if (k === "ArrowLeft" || k === "ArrowRight") { e.preventDefault(); select(S.sel + (k === "ArrowRight" ? 1 : -1)); }
+  else if (/^[1-5]$/.test(k)) select(+k - 1);
+  else if ("gG".includes(k)) applyPreset("good");
+  else if ("mM".includes(k)) applyPreset("moderate");
+  else if ("pP".includes(k)) applyPreset("poor");
+  else if ("xX".includes(k)) applyPreset("gs_down");
+  else if ("rR".includes(k)) applyPreset("real");
+  else if ("tT".includes(k)) toggleTrace();
+  else if (k === "Enter" || k === " ") { e.preventDefault(); $("in_" + METRICS[S.sel].key).focus(); $("in_" + METRICS[S.sel].key).select(); }
+});
+
+// -------------------------------------------------------------- statistics
+function win(sec) { const t = S.last ? S.last.t : 0; return S.frames.filter(f => f.t > t - sec); }
+function fpsAt(i) {
+  const t = S.frames[i].t; let n = 0;
+  for (let k = i; k >= 0 && S.frames[k].t > t - 2; k--) n++;
+  const first = S.frames[Math.max(0, i - n + 1)].t;
+  const span = Math.max(t - first, 0.5);
+  return n > 1 ? (n - 1) / span : 0;
+}
+function upMbit() {
+  const w = win(2); if (!w.length) return null;
+  return w.reduce((a, f) => a + (f.upload_bytes || 0), 0) * 8 / 2 / 1e6;
+}
+
+// ------------------------------------------------------------------ events
+function handle(msg) {
+  switch (msg.type) {
+    case "state":
+      S.link = msg.link || {}; S.presets = msg.presets || {}; S.linkBy = msg.link_by;
+      S.hello = msg.hello; S.gs = msg.gs; S.trace = msg.trace; S.edgeOnline = msg.edge_online; S.gsOnline = msg.gs_online;
+      S.traces = msg.traces || [];
+      $("traceSel").innerHTML = S.traces.map(t => `<option>${t}</option>`).join("");
+      renderLink(); renderTrace(); renderNodes();
+      break;
+    case "link":
+      S.link = msg.link; S.linkBy = msg.by; renderLink();
+      break;
+    case "trace":
+      if (msg.finished) { if (S.trace && S.trace.name === msg.name) S.trace = null; log(`trace ${msg.name} ${msg.stopped ? "stopped" : "finished"}`, "ln"); }
+      else { S.trace = { ...(S.trace || {}), name: msg.name, duration_s: msg.duration_s, elapsed_s: msg.t_s };
+             const L = S.link; log(`trace step @${fmt(msg.t_s)} s: delay ${fmt(L.delay_ms)} ms, loss ${fmt(L.loss_pct)} %, ${L.rate_mbit ? fmt(L.rate_mbit, 1) + " Mbit/s" : "no rate limit"}, RSSI ${L.rssi_dbm == null ? "real" : fmt(L.rssi_dbm)}`, "ln"); }
+      renderTrace();
+      break;
+    case "status":
+      if (S.edgeOnline && !msg.edge_online) log("UAV went offline");
+      if (!S.gsOnline && msg.gs_online) log("ground station reporting");
+      if (S.gsOnline && !msg.gs_online) log("ground station stopped reporting");
+      S.edgeOnline = msg.edge_online; S.gsOnline = msg.gs_online;
+      if (msg.trace) S.trace = msg.trace; else if (S.trace && S.trace.elapsed_s > S.trace.duration_s) S.trace = null;
+      renderTrace(); renderNodes();
+      break;
+    case "hello":
+      S.hello = msg.hello; S.frames = []; S.switches = 0; S.fallbacks = 0; S.total = 0; S.prevMode = null; S.edgeOnline = true;
+      log(`UAV connected: ${msg.hello.host} · ${msg.hello.mode} mode`, "sw");
+      renderNodes();
+      break;
+    case "bye":
+      S.edgeOnline = false; log("UAV run finished"); renderNodes();
+      break;
+    case "gs":
+      S.gs = msg.gs; S.gsOnline = true; renderNodes();
+      break;
+    case "frames":
+      onFrames(msg);
+      break;
+  }
+}
+function onFrames(msg) {
+  S.edgeOnline = true;
+  for (const f of msg.frames) {
+    f.set = msg.link;
+    S.frames.push(f);
+    f.fps = fpsAt(S.frames.length - 1);
+    S.total++;
+    if (f.switch) {
+      S.switches++;
+      log(`${S.prevMode ? modeOf(S.prevMode).short + " " : ""}→ ${modeOf(f.mode).short}  (${f.switch})`, "sw");
+    }
+    if (f.fallback) {
+      S.fallbacks++; S.fbPending++;
+      $("flash").classList.add("show"); $("fbtag").classList.add("show");
+      setTimeout(() => { $("flash").classList.remove("show"); $("fbtag").classList.remove("show"); }, 60);
+    }
+    S.prevMode = f.mode;
+    S.last = f;
+  }
+  if (S.fbPending && performance.now() - S.lastFbLog > 1500) {
+    log(`fallback ×${S.fbPending}: ground station did not answer in time → frame re-run on board`, "fb");
+    S.fbPending = 0; S.lastFbLog = performance.now();
+  }
+  const cut = S.last.t - 90;
+  while (S.frames.length && S.frames[0].t < cut) S.frames.shift();
+  if (msg.jpeg) {
+    const img = new Image();
+    const f = S.last, tracks = msg.tracks;
+    img.onload = () => { S.img = img; S.imgFrame = f; S.tracks = tracks; S.videoDirty = true; };
+    img.src = "data:image/jpeg;base64," + msg.jpeg;
+  }
+  S.dirty = true;
+}
+
+// ---------------------------------------------------------------- rendering
+function renderNodes() {
+  const h = S.hello || {}, g = S.gs || {};
+  const eOn = S.edgeOnline;
+  ["dotEdge", "dotEdge2"].forEach(id => $(id).className = "dot" + (eOn ? " on" : ""));
+  $("live").classList.toggle("off", !eOn);
+  $("pillEdge").textContent = eOn ? `${h.host || "online"} · ${h.mode || ""}` : (S.hello ? "offline" : "waiting");
+  $("nUavN").textContent = h.local_model ? h.local_model.replace(".onnx", "").replace(".tflite", "") : (h.host || "—");
+  $("nUavX").textContent = h.host ? `${h.host}${h.camera_fps ? " · cam " + fmt(h.camera_fps) + " fps" : ""}` : "not connected";
+  const gsModel = g.model || h.gs_model, gsDev = g.device || h.gs_device;
+  const gsOn = S.gsOnline;
+  const gsVia = !gsOn && h.gs_model && S.last && S.last.link && S.last.link.rtt_ms != null && S.last.link.loss < 1;
+  ["dotGs", "dotGs2"].forEach(id => $(id).className = "dot" + (gsOn ? " on" : (gsVia ? " warn" : "")));
+  $("pillGs").textContent = gsModel ? `${gsModel} · ${gsDev || "?"}` : "—";
+  $("nGsN").textContent = gsModel || "—";
+  $("nGsX").textContent = gsOn
+    ? `${gsDev} · ${fmt(g.fps, 1)} req/s · infer ${fmt(g.inference_ms_p50, 1)} ms`
+    : (gsModel ? `${gsDev || ""} · (no --demo push)` : "not connected");
+  const p = h.policy;
+  $("polCfg").textContent = p ? `RTT ${p.rtt_good_ms}/${p.rtt_poor_ms} ms · loss ${p.loss_good * 100}/${p.loss_poor * 100} % · deadline ${p.deadline_ms} ms` : (h.mode ? `${h.mode} mode (fixed)` : "");
+  const hint = $("hint");
+  if (hint && !hint.dataset.set) { hint.dataset.set = 1; hint.textContent = hint.textContent.replace("<this-Mac>", location.hostname === "localhost" ? "<this-Mac-IP>" : location.hostname); }
+}
+
+function render() {
+  const f = S.last;
+  $("nosig").style.display = f ? "none" : "flex";
+  if (!f) return;
+  const M = modeOf(f.mode);
+  const h = S.hello || {};
+  const remote = f.source === "ground_station";
+  $("badge").style.borderLeftColor = f.fallback ? "var(--bad)" : M.c;
+  $("bm").textContent = M.m; $("bm").style.color = M.c;
+  const sent = f.sent_w ? `${f.sent_w}×${f.sent_h}` : "";
+  $("bs").textContent = remote
+    ? `${h.gs_model || "server model"} on ground station · sends ${sent} JPEG`
+    : `${(h.local_model || "INT8 model").replace(".onnx", "")} on the UAV · nothing sent${f.fallback ? " (fallback)" : ""}`;
+  $("hudFps").textContent = fmt(f.fps, 1);
+  $("hudFrame").textContent = f.frame_id;
+  $("hudTracks").textContent = S.tracks.length;
+  $("hudAge").textContent = fmt(f.age_ms) + " ms";
+  $("hudSrc").innerHTML = remote ? `inference: <b>ground station</b>` : `inference: <b>on board</b>`;
+
+  // kpis
+  const w2 = win(2), w5 = win(5);
+  const ok2 = w2.filter(x => x.ok);
+  $("kFps").innerHTML = `${fmt(f.fps, 1)}<small>fps</small>`;
+  $("kFpsD").textContent = `camera ${h.camera_fps ? fmt(h.camera_fps) + " fps" : "—"}`;
+  const e2e = pct(ok2.map(x => x.e2e_ms));
+  const dl = h.deadline_ms || 500;
+  $("kE2e").innerHTML = `${fmt(e2e)}<small>ms</small>`;
+  $("kE2e").style.color = e2e != null && e2e > dl ? "var(--bad)" : "";
+  $("kE2eD").textContent = `p50 · deadline ${dl} ms`;
+  $("kAge").innerHTML = `${fmt(pct(ok2.map(x => x.age_ms)))}<small>ms</small>`;
+  $("kInf").innerHTML = `${fmt(pct(ok2.map(x => x.inference_ms)), 1)}<small>ms</small>`;
+  $("kInfD").textContent = remote ? `${h.gs_device || "GS"} · network ${fmt(pct(ok2.map(x => x.network_ms)))} ms` : `on the UAV CPU`;
+  const up = upMbit();
+  $("kUp").innerHTML = `${fmt(up, up < 10 ? 2 : 1)}<small>Mbit/s</small>`;
+  $("kUpD").textContent = `${fmt(w2.length ? w2.reduce((a, x) => a + x.upload_bytes, 0) / w2.length / 1024 : null, 1)} KB / frame`;
+  const dr = w5.reduce((a, x) => a + (x.dropped || 0), 0);
+  $("kDrop").innerHTML = `${fmt(w5.length ? 100 * dr / (dr + w5.length) : null)}<small>%</small>`;
+  $("kDropD").textContent = `${dr} / ${dr + w5.length} frames · 5 s`;
+
+  // policy
+  const P = f.policy;
+  $("pMode").textContent = M.m; $("pMode").style.color = M.c;
+  $("pWhere").textContent = remote ? "→ ground station" : "→ on board";
+  if (P) {
+    const T = modeOf(P.target);
+    $("pReason").innerHTML = `link says <b style="color:${T.c}">${T.short}</b> · ${escapeHtml(P.reason || "")}`;
+    if (P.pending) {
+      const pm = modeOf(P.pending);
+      const left = Math.max(P.hold_s - P.pending_s, P.dwell_left_s);
+      $("pPend").firstChild.textContent = `switching to ${pm.short} in ${fmt(Math.max(left, 0), 1)} s (hold ${fmt(P.hold_s, 1)} s${P.dwell_left_s > 0 ? `, dwell ${fmt(P.dwell_left_s, 1)} s` : ""})`;
+      $("pBar").style.width = `${Math.min(100, 100 * P.pending_s / Math.max(P.hold_s, 0.01))}%`;
+      $("pBar").style.background = pm.c;
+    } else {
+      $("pPend").firstChild.textContent = P.dwell_left_s > 0 ? `holding mode (min dwell ${fmt(P.dwell_left_s, 1)} s left)` : "stable";
+      $("pBar").style.width = "0%";
+    }
+  } else {
+    $("pReason").textContent = `fixed ${f.mode} mode (start with --mode adaptive for the policy engine)`;
+    $("pPend").firstChild.textContent = "";
+  }
+  const w60 = win(60), modes = ["remote_full", "remote_reduced", "local", "remote"];
+  const cnt = modes.map(m => w60.filter(x => x.mode === m).length);
+  const n = Math.max(1, w60.length);
+  $("share").innerHTML = modes.map((m, i) => cnt[i] ? `<i style="width:${100 * cnt[i] / n}%;background:${modeOf(m).c}"></i>` : "").join("");
+  $("sharel").innerHTML = modes.filter((m, i) => cnt[i] || i < 3).map(m => `<span style="--c:${modeOf(m).c}">${modeOf(m).short} ${fmt(100 * cnt[modes.indexOf(m)] / n)}%</span>`).join("");
+  $("cSw").textContent = S.switches; $("cFb").textContent = S.fallbacks; $("cFr").textContent = S.total;
+
+  // topology
+  $("nUav").classList.toggle("active", !remote);
+  $("nGs").classList.toggle("active", remote);
+  const L = f.link || {};
+  const wl = $("wireL");
+  const q = L.rtt_ms == null || L.loss >= 0.5 ? "#f87171" : (P ? modeOf(P.target).c : "#38bdf8");
+  wl.setAttribute("stroke", q);
+  wl.classList.toggle("flow", remote);
+  $("wireLbl").innerHTML = `RTT <b>${fmt(L.rtt_ms)}</b> ms · loss <b>${fmt((L.loss || 0) * 100)}</b>%` + (L.rssi_dbm != null ? ` · <b>${fmt(L.rssi_dbm)}</b> dBm` : "");
+  renderMeasured(f);
+  renderNodes();
+}
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// video canvas
+const vc = $("vc"), vx = vc.getContext("2d");
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * d), h = Math.round(r.height * d);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; return true; }
+  return false;
+}
+const hue = id => (id * 137.508) % 360;
+function drawVideo() {
+  fitCanvas(vc);
+  const W = vc.width, H = vc.height, d = window.devicePixelRatio || 1;
+  vx.fillStyle = "#05080b"; vx.fillRect(0, 0, W, H);
+  if (!S.img) return;
+  const iw = S.img.naturalWidth, ih = S.img.naturalHeight;
+  const sc = Math.min(W / iw, H / ih), dw = iw * sc, dh = ih * sc, ox = (W - dw) / 2, oy = (H - dh) / 2;
+  vx.drawImage(S.img, ox, oy, dw, dh);
+  const f = S.imgFrame; if (!f) return;
+  const k = dw / (f.orig_w || iw);
+  vx.lineJoin = "round";
+  for (const t of S.tracks) {
+    const col = `hsl(${hue(t.id)} 90% 62%)`;
+    const [x1, y1, x2, y2] = t.box.map((v, i) => (i % 2 ? oy : ox) + v * k);
+    if (t.trail && t.trail.length > 1) {
+      vx.beginPath();
+      t.trail.forEach(([x, y], i) => { const px = ox + x * k, py = oy + y * k; i ? vx.lineTo(px, py) : vx.moveTo(px, py); });
+      vx.strokeStyle = `hsl(${hue(t.id)} 90% 62% / .55)`; vx.lineWidth = 2 * d; vx.stroke();
+    }
+    vx.strokeStyle = col; vx.lineWidth = 2 * d; vx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    if (x2 - x1 > 14 * d) {
+      const label = `#${t.id} ${t.label} ${Math.round(t.confidence * 100)}%`;
+      vx.font = `600 ${11 * d}px ui-monospace, Menlo, monospace`;
+      const tw = vx.measureText(label).width + 8 * d, th = 15 * d;
+      const ly = y1 - th < oy ? y1 : y1 - th;
+      vx.fillStyle = col; vx.fillRect(x1 - d, ly, tw, th);
+      vx.fillStyle = "#06090c"; vx.fillText(label, x1 + 3 * d, ly + 11 * d);
+    }
+  }
+}
+
+// charts
+function niceMax(v) { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (v <= m * p) return m * p; return 10 * p; }
+function drawChart(c, opt) {
+  fitCanvas(c);
+  const x = c.getContext("2d"), d = window.devicePixelRatio || 1, W = c.width, H = c.height;
+  x.clearRect(0, 0, W, H);
+  const L = 44 * d, R = 8 * d, T = 24 * d, B = 14 * d, pw = W - L - R, ph = H - T - B;
+  const fr = S.frames; if (!fr.length) return;
+  const t1 = S.last.t, t0 = t1 - 60;
+  const X = t => L + (t - t0) / 60 * pw;
+  let vmax = 0;
+  for (const s of opt.series) for (const f of fr) { const v = s.get(f); if (v != null && f.t >= t0 && isFinite(v)) vmax = Math.max(vmax, v); }
+  for (const th of opt.lines || []) vmax = Math.max(vmax, th.v * 1.15);
+  vmax = niceMax(Math.min(vmax, opt.cap || Infinity));
+  const Y = v => T + ph - Math.min(v, vmax) / vmax * ph;
+  // mode band
+  for (let i = 0; i < fr.length; i++) {
+    const f = fr[i]; if (f.t < t0) continue;
+    const xa = X(Math.max(f.t, t0)), xb = i + 1 < fr.length ? X(fr[i + 1].t) : X(t1) + 2;
+    x.fillStyle = modeOf(f.mode).c; x.globalAlpha = .07; x.fillRect(xa, T, xb - xa + .5, ph);
+    x.globalAlpha = .9; x.fillRect(xa, T - 5 * d, xb - xa + .5, 3 * d);
+    x.globalAlpha = 1;
+  }
+  // grid
+  x.font = `${10 * d}px ui-monospace, Menlo, monospace`; x.textAlign = "right"; x.textBaseline = "middle";
+  for (let k = 0; k <= 2; k++) {
+    const v = vmax * k / 2, y = Y(v);
+    x.strokeStyle = "#1b2430"; x.lineWidth = d; x.beginPath(); x.moveTo(L, y); x.lineTo(W - R, y); x.stroke();
+    x.fillStyle = "#5b6878"; x.fillText(v >= 100 ? v.toFixed(0) : +v.toFixed(1), L - 6 * d, y);
+  }
+  x.textAlign = "left"; x.textBaseline = "alphabetic"; x.fillStyle = "#8796a8"; x.font = `600 ${10 * d}px -apple-system, system-ui, sans-serif`;
+  x.fillText(opt.title, L, 10 * d);
+  // threshold lines
+  for (const th of opt.lines || []) {
+    const y = Y(th.v);
+    x.setLineDash([4 * d, 4 * d]); x.strokeStyle = th.c; x.globalAlpha = .7; x.lineWidth = d;
+    x.beginPath(); x.moveTo(L, y); x.lineTo(W - R, y); x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
+    x.fillStyle = th.c; x.textAlign = "right"; x.font = `${9 * d}px ui-monospace, Menlo, monospace`;
+    x.fillText(th.label, W - R - 2 * d, y - 3 * d); x.textAlign = "left";
+  }
+  // series
+  for (const s of opt.series) {
+    x.strokeStyle = s.c; x.lineWidth = (s.w || 1.6) * d; if (s.dash) x.setLineDash(s.dash.map(v => v * d));
+    x.beginPath(); let pen = false, pt = null;
+    for (const f of fr) {
+      if (f.t < t0) continue;
+      const v = s.get(f);
+      if (v == null || !isFinite(v) || (pt != null && f.t - pt > 1.5)) { pen = false; if (v == null) continue; }
+      const px = X(f.t), py = Y(v);
+      if (s.step && pen) x.lineTo(px, x._ly);
+      pen ? x.lineTo(px, py) : x.moveTo(px, py); pen = true; pt = f.t; x._ly = py;
+    }
+    x.stroke(); x.setLineDash([]);
+  }
+  // x labels
+  x.fillStyle = "#5b6878"; x.font = `${9 * d}px ui-monospace, Menlo, monospace`; x.textAlign = "center";
+  for (const s of [60, 45, 30, 15, 0]) x.fillText(s ? `-${s}s` : "now", X(t1 - s) - (s ? 0 : 10 * d), H - 2 * d);
+}
+function drawCharts() {
+  const h = S.hello || {}, p = h.policy;
+  drawChart($("c1"), {
+    title: "Link · RTT measured by the UAV (ms)", cap: 1200,
+    lines: p ? [{ v: p.rtt_good_ms, c: "#34d399", label: `good < ${p.rtt_good_ms}` }, { v: p.rtt_poor_ms, c: "#f87171", label: `poor > ${p.rtt_poor_ms}` }] : [],
+    series: [
+      { get: f => f.set ? f.set.delay_ms : null, c: "#5b6878", dash: [3, 3], w: 1.2 },
+      { get: f => f.link ? f.link.rtt_ms : null, c: "#38bdf8", w: 2 },
+    ],
+  });
+  drawChart($("c2"), {
+    title: "Pipeline · end-to-end latency per frame (ms)", cap: 3000,
+    lines: [{ v: h.deadline_ms || 500, c: "#fbbf24", label: `deadline ${h.deadline_ms || 500}` }],
+    series: [{ get: f => f.ok ? f.e2e_ms : null, c: "#e7edf4", w: 1.4 }],
+  });
+  drawChart($("c3"), {
+    title: "Pipeline · processed frames per second", lines: h.camera_fps ? [{ v: h.camera_fps, c: "#5b6878", label: `camera ${h.camera_fps}` }] : [],
+    series: [{ get: f => f.fps, c: "#34d399", w: 2 }],
+  });
+}
+
+let lastDom = 0, lastChart = 0;
+function loop(ts) {
+  drawVideo();
+  if (ts - lastDom > 200) { lastDom = ts; render(); }
+  if (ts - lastChart > 120) { lastChart = ts; drawCharts(); }
+  requestAnimationFrame(loop);
+}
+
+// --------------------------------------------------------------------- go
+buildRows();
+function connect() {
+  const es = new EventSource("/events");
+  es.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+  es.onerror = () => { $("pillEdge").textContent = "demo server offline"; };
+}
+connect();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

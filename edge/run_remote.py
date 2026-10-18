@@ -24,6 +24,11 @@ python -m edge.run_remote --mode local --model models/yolov8n_int8_320.tflite \
 python -m edge.run_remote --mode adaptive --server http://192.168.1.50:8000 \
     --source data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime --loop 4
 
+# live demo: stream every frame to the demo dashboard (demo/server.py on the Mac) and let
+# the dashboard emulate the link to the ground station (delay / loss / bandwidth / RSSI)
+python -m edge.run_remote --mode adaptive --server http://192.168.1.50:8000 \
+    --demo http://192.168.1.20:8100 --source data/uav0000117_02622_v --realtime --loop 100
+
 Writes one CSV row per frame (default logs/remote_client_log.csv) and prints a
 summary: latency percentiles, bytes/frame, and reliability (= share of frames
 with a valid result within --deadline-ms); in --realtime mode also the share of
@@ -160,17 +165,35 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--min-dwell", type=float, default=2.0, help="min s between mode switches")
     g.add_argument("--no-fallback", action="store_true",
                    help="adaptive: do not re-run a failed remote frame locally")
+    d = ap.add_argument_group("live demo (demo/server.py)")
+    d.add_argument("--demo", default=None, metavar="URL",
+                   help="demo instance, e.g. http://192.168.1.20:8100: frames, detections and "
+                        "metrics are streamed there, and its link controls shape the GS link")
+    d.add_argument("--demo-width", type=int, default=640, help="width of the preview sent to the demo")
+    d.add_argument("--demo-fps", type=float, default=15.0, help="max preview images per second")
+    d.add_argument("--no-demo-shaper", action="store_true",
+                   help="only report to the demo; ignore its link controls (e.g. with tc netem)")
     return ap
 
 
 def build_client(args, ap):
-    """Returns (detector, link monitor or None, setting name)."""
+    """Returns (detector, link monitor or None, setting name, demo reporter or None)."""
+    shaper = reporter = None
+    if args.demo:
+        from edge.demo_link import DemoReporter, LinkShaper
+
+        shaper = None if args.no_demo_shaper else LinkShaper()
+        reporter = DemoReporter(args.demo, shaper, args.demo_width, args.demo_fps)
     monitor = None
     if args.server:
         from edge.link_monitor import LinkMonitor
 
         monitor = LinkMonitor(args.server, interval_s=args.probe_interval,
                               timeout_s=min(1.0, args.deadline_ms / 1000.0), iface=args.iface)
+        if shaper:
+            from edge.demo_link import attach_shaper
+
+            attach_shaper(monitor, shaper)
     local = None
     if args.mode in ("local", "adaptive"):
         from edge.local_detector import LocalDetector
@@ -178,36 +201,63 @@ def build_client(args, ap):
         local = LocalDetector(args.model, conf=args.conf or 0.25, num_threads=args.threads)
         info = local.health()
         print(f"[uav] local model: {info['model']} ({info['device']}, input {local.imgsz}x{local.imgsz})")
-    remote = None
+    remote = gs_info = None
     if args.mode in ("remote", "adaptive"):
         if not args.server:
             ap.error(f"--server is required in {args.mode} mode")
         timeout = min(args.timeout, args.deadline_ms / 1000.0) if args.mode == "adaptive" else args.timeout
         remote = RemoteDetector(args.server, timeout)
+        if shaper:
+            from edge.demo_link import ShapedRemote
+
+            remote = ShapedRemote(remote, shaper)
         try:
             info = remote.health()
+            gs_info = info
             print(f"[uav] ground station: model={info['model']} device={info['device']}")
         except Exception as e:
             if args.mode == "remote":
                 sys.exit(f"[uav] ground station not reachable at {args.server}: {e}")
             print(f"[uav] ground station not reachable now ({type(e).__name__}); adaptive starts locally")
+    cfg = None
+    if args.mode == "adaptive":
+        from edge.policy import PolicyConfig
+
+        cfg = PolicyConfig(rtt_good_ms=args.rtt_good, rtt_poor_ms=args.rtt_poor,
+                           loss_good=args.loss_good, loss_poor=args.loss_poor,
+                           rssi_good_dbm=args.rssi_good, rssi_poor_dbm=args.rssi_poor,
+                           deadline_ms=args.deadline_ms, down_hold_s=args.down_hold,
+                           up_hold_s=args.up_hold, min_dwell_s=args.min_dwell,
+                           use_rssi=not args.no_rssi)
+    if reporter:      # before the monitor's warm-up probes, so they already see the demo's link
+        import socket
+        from dataclasses import asdict
+
+        reporter.start({
+            "host": socket.gethostname(), "mode": args.mode, "source": args.source,
+            "realtime": args.realtime, "camera_fps": (args.fps or 30.0) if args.realtime else None,
+            "deadline_ms": args.deadline_ms, "server": args.server,
+            "local_model": os.path.basename(args.model) if local else None,
+            "local_device": local.health()["device"] if local else None,
+            "gs_model": gs_info.get("model") if gs_info else None,
+            "gs_device": gs_info.get("device") if gs_info else None,
+            "policy": asdict(cfg) if cfg else None,
+            "policy_modes": [m.strip() for m in args.policy_modes.split(",")],
+            "reduced_width": args.reduced_width, "reduced_quality": args.reduced_quality,
+            "full_quality": args.quality, "shaper": shaper is not None,
+        })
     if monitor:
         monitor.start()
         print(f"[uav] link monitor: {monitor.snapshot().short()}")
 
     if args.mode == "local":
-        return local, monitor, "local_" + os.path.splitext(os.path.basename(args.model))[0]
+        return local, monitor, "local_" + os.path.splitext(os.path.basename(args.model))[0], reporter
     if args.mode == "remote":
-        return remote, monitor, f"w{args.max_width or 'full'}_q{args.quality}"
+        return remote, monitor, f"w{args.max_width or 'full'}_q{args.quality}", reporter
 
     from edge.adaptive import AdaptiveDetector
-    from edge.policy import Policy, PolicyConfig
+    from edge.policy import Policy
 
-    cfg = PolicyConfig(rtt_good_ms=args.rtt_good, rtt_poor_ms=args.rtt_poor,
-                       loss_good=args.loss_good, loss_poor=args.loss_poor,
-                       rssi_good_dbm=args.rssi_good, rssi_poor_dbm=args.rssi_poor,
-                       deadline_ms=args.deadline_ms, down_hold_s=args.down_hold,
-                       up_hold_s=args.up_hold, min_dwell_s=args.min_dwell, use_rssi=not args.no_rssi)
     modes = [m.strip() for m in args.policy_modes.split(",")]
     policy = Policy(cfg, initial=modes[0], modes=modes)
     first, why = policy.classify(monitor.snapshot())     # start in the mode the link supports
@@ -215,13 +265,30 @@ def build_client(args, ap):
     print(f"[policy] start in {policy.mode} ({why})")
     client = AdaptiveDetector(remote, local, monitor, policy, args.reduced_width,
                               args.reduced_quality, args.quality, fallback=not args.no_fallback)
-    return client, monitor, "adaptive"
+    return client, monitor, "adaptive", reporter
+
+
+def demo_meta(row: dict, res, info: dict, client) -> dict:
+    """One frame for the demo dashboard (see edge/demo_link.py)."""
+    num = lambda v: None if v in ("", None) else float(v)
+    meta = {k: row[k] for k in ("frame_id", "src_index", "dropped", "orig_w", "orig_h", "sent_w",
+                                "sent_h", "ok", "error", "encode_ms", "network_ms", "server_ms",
+                                "inference_ms", "e2e_ms", "age_ms", "upload_bytes", "mode",
+                                "fallback", "switch")}
+    meta["t"] = time.time()
+    meta["source"] = "edge" if info["mode"] == "local" or info["fallback"] else "ground_station"
+    meta["detections"] = res.detections
+    meta["link"] = {"rtt_ms": num(info["link_rtt_ms"]), "loss": num(info["link_loss"]),
+                    "frame_e2e_ms": num(info["link_e2e_ms"]), "rssi_dbm": num(info["rssi_dbm"])}
+    policy = getattr(client, "policy", None)
+    meta["policy"] = policy.status(time.monotonic()) if policy is not None else None
+    return meta
 
 
 def main() -> None:
     ap = build_parser()
     args = ap.parse_args()
-    client, monitor, setting = build_client(args, ap)
+    client, monitor, setting, reporter = build_client(args, ap)
 
     if args.save_vis:
         os.makedirs(args.save_vis, exist_ok=True)
@@ -268,6 +335,8 @@ def main() -> None:
             }
             writer.writerow(row)
             rows.append(row)
+            if reporter:
+                reporter.submit(frame, demo_meta(row, res, info, client))
             all_dets[fid] = res.detections
             status = f"{len(res.detections):2d} objs" if res.ok else f"FAIL ({res.error})"
             drop = f"  drop={fr.dropped:3d}" if args.realtime else ""
@@ -285,6 +354,8 @@ def main() -> None:
         if monitor:
             monitor.stop()
         logf.close()
+        if reporter:
+            reporter.stop(summarize(rows, args.deadline_ms, wall_s))
 
     if args.save_json:
         with open(args.save_json, "w") as f:

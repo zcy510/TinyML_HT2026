@@ -10,6 +10,7 @@ Course project (Tiny Machine Learning, Stockholm University, HT2026). Chengyi Zh
 ground_station/      Remote high-complexity mode (runs on the Windows PC)
   detector.py          YOLOv8s wrapper (auto CUDA/CPU, thread-safe, timing)
   server.py            FastAPI server: /health, /ping, /detect; per-frame CSV log
+  demo_push.py         optional status push to the live demo dashboard (--demo URL)
 edge/                UAV side (Raspberry Pi 5)
   frame_source.py      folder / video / camera / picam frames; --realtime camera replay
   local_detector.py    edge mode: INT8 YOLOv8n (ONNX Runtime or LiteRT) on the Pi, same interface as remote
@@ -18,6 +19,11 @@ edge/                UAV side (Raspberry Pi 5)
   adaptive.py          per-frame remote_full / remote_reduced / local selection + local fallback
   remote_client.py     JPEG encode + optional downscale, send, map boxes back, timing
   run_remote.py        CLI: any source -> server, CSV log + summary
+  demo_link.py         live demo: link shaper controlled by the dashboard + frame reporter
+demo/                Live demo instance (runs on the Mac, standard library only)
+  server.py            dashboard server: receives UAV frames + GS status, link controls, trace playback
+  tracker.py           IoU tracker (ids + trails) for the dashboard
+  static/index.html    the dashboard (video + tracks, FPS / latency / policy, link emulator, charts)
 tools/
   visdrone.py          VisDrone2019-VID annotations -> YOLO labels with COCO class ids
   export_onnx_norm.py  YOLOv8 -> ONNX with 0..1 boxes (INT8-friendly output)
@@ -39,6 +45,7 @@ scripts/               deploy scripts; run_experiment.sh = remote vs local vs ad
 | Lightweight TinyML edge pipeline (Oct 9-11) | Implemented (INT8 YOLOv8n, ONNX Runtime PTQ) |
 | Link monitoring + threshold policy engine (Oct 12-15) | Implemented (RTT, loss, RSSI, remote latency; hysteresis) |
 | Integration, experiments, analysis (Oct 16-29) | Adaptive mode + trace-driven experiment script ready; experiments next |
+| Live demo | Dashboard on the Mac: live video + tracks, metrics, policy state, link emulator (keyboard / traces) |
 
 ## Quick start: one-click deploy
 
@@ -225,6 +232,57 @@ working). netem cannot change the real Wi-Fi signal, so the trace RSSI is writte
 The sequence is looped (`--loop`) and the run stopped after the trace length (`--max-seconds`);
 `eval_detection` scores looped runs per repetition. Note: shaping acts on the Pi's outgoing
 packets, so `delay_ms` is added once per round trip and `rate_mbit` limits the upload.
+
+## Live demo: dashboard with an adjustable link
+
+Three processes: the **UAV** (Raspberry Pi, `edge.run_remote`), the **ground station**
+(Mac or lab PC, `ground_station.server`) and the **demo instance** (`demo.server`, on the Mac).
+
+```
+ UAV (Pi) ──── frames, /ping (shaped) ────▶ ground station (YOLOv8s)
+    │  ▲                                          │
+    │  └── link settings (delay/loss/rate/RSSI) ──┐│ status (model, device, inference ms)
+    └── every frame: mode, timings, link, policy, │▼
+        detections + 640 px preview ─────▶ demo instance ◀── browser: http://localhost:8100
+```
+
+```bash
+# 1. Mac: dashboard (opens the browser; prints the --demo URL to use)
+./scripts/run_demo.sh                    # or: python -m demo.server --open
+./scripts/run_demo.sh --gs               # ... and the ground station on the same Mac
+
+# 2. ground station elsewhere (lab PC):  scripts\run_ground_station.bat yolov8s.pt http://<Mac-IP>:8100
+#    or any machine:  python -m ground_station.server --demo http://<Mac-IP>:8100
+
+# 3. Pi: adaptive pipeline, reporting to the dashboard
+./scripts/deploy_edge.sh <GS-IP> data/uav0000117_02622_v --realtime --loop 100 \
+    --mode adaptive --model models/yolov8n_int8_320.onnx --demo http://<Mac-IP>:8100
+```
+
+**What the dashboard shows:** the camera frame with tracked boxes (ids and trails from a
+small IoU tracker on the demo side; the pipeline itself is detection-only), the current mode
+and where inference ran (ground station or on board), processed vs camera FPS, end-to-end
+latency, result age, inference and network time, uplink Mbit/s, drop rate, the policy's live
+decision (what the link classifies as, the reason, and the hold / dwell timer before a switch),
+mode share, switches and fallbacks, and 60 s charts of measured RTT (with the policy
+thresholds), latency (with the deadline) and FPS, coloured by mode.
+
+**Changing the link:** type a value, or select a metric (`1`–`5` / `←` `→`) and press `↑` `↓`
+(`Shift` = ×5): extra delay, jitter, loss, uplink bandwidth, RSSI. Presets `G` good, `M`
+moderate, `P` poor, `X` ground station down, `R` reset; `T` plays a trace from `traces/`
+(the same flights as the netem experiments) in real time. The UAV fetches the settings
+within ~0.25 s and applies them to its *real* traffic to the ground station
+(`edge/demo_link.py`): delay is added to every `/ping` and `/detect`, a lost request waits
+for the timeout, the upload takes `bytes / rate`, and the RSSI replaces the Wi-Fi reading.
+The policy engine is never told the settings; it reacts to what the link monitor measures,
+like with `tools.link_emulator` - but without root and on any OS. The demo traffic itself
+is not shaped. With `--no-demo-shaper` the UAV only reports (e.g. when shaping with netem).
+
+Notes: the dashboard needs only the Python standard library; allow incoming connections for
+Python on the Mac (port 8100). Preview size/rate: `--demo-width 640 --demo-fps 15`. With a
+bandwidth limit, pings stay fast while frames time out, so the policy goes to on-board via
+loss and may try `remote_reduced` again when probes look good: that is the latency-rule case
+from `bandwidth_drop.csv`, visible live on the dashboard.
 
 ## 3. Evaluation
 

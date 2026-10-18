@@ -53,6 +53,8 @@ class Policy:
         self.last_switch_t: Optional[float] = None
         self._pending: Optional[Tuple[int, float]] = None  # (target level, since)
         self.switches = 0
+        self.last_target: int = self.level                 # last classification (for the demo)
+        self.last_reason: str = ""
 
     @property
     def mode(self) -> str:
@@ -93,6 +95,7 @@ class Policy:
     def update(self, s: LinkState, now: float) -> Tuple[str, bool, str]:
         """Returns (mode, switched, reason)."""
         target, reason = self.classify(s)
+        self.last_target, self.last_reason = target, reason
         if self.last_switch_t is None:
             self.last_switch_t = now
         if target == self.level:
@@ -113,3 +116,16 @@ class Policy:
             self.switches += 1
             return self.mode, True, reason
         return self.mode, False, reason
+
+    def status(self, now: float) -> dict:
+        """What the policy is thinking right now (shown live by the demo dashboard)."""
+        st = {"mode": self.mode, "target": self.modes[self.last_target], "reason": self.last_reason,
+              "pending": None, "pending_s": 0.0, "hold_s": 0.0,
+              "dwell_left_s": 0.0 if self.last_switch_t is None
+              else max(0.0, self.cfg.min_dwell_s - (now - self.last_switch_t))}
+        if self._pending is not None and self._pending[0] != self.level:
+            worse = self._pending[0] > self.level
+            st["pending"] = self.modes[self._pending[0] if worse else self.level - 1]
+            st["pending_s"] = now - self._pending[1]
+            st["hold_s"] = self.cfg.down_hold_s if worse else self.cfg.up_hold_s
+        return st

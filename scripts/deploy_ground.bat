@@ -4,6 +4,7 @@ REM One-click deploy + start of the ground station on the Windows lab PC.
 REM Double-click it, or from the repo root:
 REM     scripts\deploy_ground.bat              (yolov8s.pt)
 REM     scripts\deploy_ground.bat yolov8m.pt   (other model)
+REM     scripts\deploy_ground.bat yolov8s.pt http://192.168.1.20:8100   (report to the live demo dashboard)
 REM     set SKIP_TESTS=1 ^& scripts\deploy_ground.bat
 REM Steps: .venv -> PyTorch (CUDA build if an NVIDIA GPU is present) -> deps
 REM        (only when requirements change) -> quick tests -> firewall -> server
@@ -13,6 +14,8 @@ cd /d "%~dp0\.."
 
 set "WEIGHTS=%~1"
 if "%WEIGHTS%"=="" set "WEIGHTS=yolov8s.pt"
+set "DEMO_ARG="
+if not "%~2"=="" set "DEMO_ARG=--demo %~2"
 REM CUDA 12.6 wheels: Python 3.9-3.13, NVIDIA driver 528+ (change if needed)
 set "TORCH_INDEX=https://download.pytorch.org/whl/cu126"
 
@@ -98,7 +101,7 @@ echo Give the Raspberry Pi one of these addresses ^(http://IP:8000^):
 ipconfig | findstr /i "IPv4"
 echo ^(Ctrl+C to stop^)
 if not exist logs mkdir logs
-python -m ground_station.server --host 0.0.0.0 --port 8000 --weights %WEIGHTS% --log logs\server_log.csv
+python -m ground_station.server --host 0.0.0.0 --port 8000 --weights %WEIGHTS% --log logs\server_log.csv %DEMO_ARG%
 goto :end
 
 :fail
