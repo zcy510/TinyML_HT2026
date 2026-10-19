@@ -13,7 +13,8 @@
 #   [source]         coco128 (default: downloads 128 labelled COCO images and
 #                     also evaluates precision/recall) | picam | 0 (USB cam) |
 #                     path/to/folder | video.mp4 |
-#                     a VisDrone-VID sequence folder (.../sequences/<name>):
+#                     a VisDrone-VID sequence folder (.../sequences/<name>) or a
+#                     MOT17 sequence (.../train/MOT17-09-FRCNN[/img1]):
 #                     labels are converted automatically and accuracy is scored
 #   extra args        anything edge.run_remote accepts, e.g.
 #                     --max-width 320 --quality 70 --max-frames 50
@@ -32,12 +33,13 @@
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
 #   ./scripts/deploy_edge.sh local \
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime
+#   ./scripts/deploy_edge.sh local data/MOT17/train/MOT17-09-FRCNN --realtime
 #   ./scripts/deploy_edge.sh 192.168.31.50 \
 #       data/VisDrone2019-VID-val/sequences/uav0000086_00000_v --realtime --mode adaptive
 #
 # What it does: system packages (Pi only) -> .venv -> Python deps (only when
 # requirements change) -> checks the ground station -> runs the remote pipeline
-# -> prints latency / bandwidth / reliability (+ accuracy for coco128 and VisDrone-VID).
+# -> prints latency / bandwidth / reliability (+ accuracy for coco128, VisDrone-VID, MOT).
 # =============================================================================
 set -euo pipefail
 
@@ -53,7 +55,7 @@ die()  { printf '\033[1;31m[deploy-edge] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ arguments
 if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 SERVER="$1"; shift
@@ -178,9 +180,12 @@ if [ "$SOURCE" = "coco128" ]; then
   LABELS="$ROOT/data/coco128/labels/train2017"
 fi
 
+# MOT17 sequence folder given without img1/: the frames are in img1/
+[ -d "$SOURCE/img1" ] && SOURCE="${SOURCE%/}/img1"
+
 # VisDrone-VID sequence: .../sequences/<name> with .../annotations/<name>.txt
 EVAL_ARGS=()
-if [ -d "$SOURCE" ]; then
+if [ -d "$SOURCE" ] && [ "$(basename "$SOURCE")" != "img1" ]; then
   SEQ_NAME="$(basename "$SOURCE")"
   VD_ANN="$(cd "$SOURCE/../.." && pwd)/annotations/$SEQ_NAME.txt"
   if [ -f "$VD_ANN" ]; then
@@ -194,6 +199,20 @@ if [ -d "$SOURCE" ]; then
       [ "$a" = "--realtime" ] && EVAL_ARGS+=(--hold-last)
     done
   fi
+fi
+
+# MOTChallenge sequence (MOT17/MOT16/MOT20 train): .../<seq>/img1 with .../<seq>/gt/gt.txt
+if [ -d "$SOURCE" ] && [ "$(basename "$SOURCE")" = "img1" ] && [ -f "$SOURCE/../gt/gt.txt" ]; then
+  SEQ_NAME="$(basename "$(dirname "$SOURCE")")"
+  LABELS="$ROOT/data/mot_labels/$SEQ_NAME"
+  if [ ! -d "$LABELS" ]; then
+    say "MOT sequence detected: converting pedestrian ground truth to COCO person"
+    python -m tools.mot convert "$SOURCE" --out "$LABELS"
+  fi
+  EVAL_ARGS=(--classes 0)
+  for a in ${EXTRA[@]+"${EXTRA[@]}"}; do
+    [ "$a" = "--realtime" ] && EVAL_ARGS+=(--hold-last)
+  done
 fi
 
 # ------------------------------------------- mock mode: fake GS on this device

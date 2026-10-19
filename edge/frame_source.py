@@ -159,6 +159,20 @@ def _iter_camera(source: str, max_frames: int) -> Iterator[Frame]:
         cap.release()
 
 
+def folder_fps(folder: Path) -> float:
+    """Frame rate of an image-sequence folder: MOTChallenge's seqinfo.ini (frameRate) next to
+    an img1/ folder if present, else DEFAULT_SEQ_FPS."""
+    ini = (folder.parent if folder.name == "img1" else folder) / "seqinfo.ini"
+    try:
+        for line in ini.read_text().splitlines():
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "framerate":
+                return float(v.strip())
+    except (OSError, ValueError):
+        pass
+    return DEFAULT_SEQ_FPS
+
+
 def loop_id(frame_id: str, k: int) -> str:
     """Frame id in the k-th repetition of a looped source: '0000001', '0000001#1', ..."""
     return frame_id if k == 0 else f"{frame_id}#{k}"
@@ -170,7 +184,8 @@ def iter_frames(source: str, max_frames: int = 0, realtime: bool = False,
     sequence), a single image, a video file, a camera index or ``'picam'``.
 
     ``realtime`` / ``fps`` apply to folders and video files (see module doc);
-    ``fps=0`` means: the video's own frame rate, or 30 fps for a folder.
+    ``fps=0`` means: the video's own frame rate; for a folder its seqinfo.ini frameRate
+    (MOTChallenge), else 30 fps.
     Live cameras are real-time by nature and ignore both.
     ``loop`` plays a folder or video N times (longer experiments); frame ids of the k-th
     repetition get a ``#k`` suffix (see loop_id), which tools.eval_detection understands.
@@ -179,7 +194,7 @@ def iter_frames(source: str, max_frames: int = 0, realtime: bool = False,
     if p.is_dir():
         files = list_images(p)
         loop = max(1, loop)
-        yield from _iter_folder(files * loop, max_frames, realtime, fps or DEFAULT_SEQ_FPS,
+        yield from _iter_folder(files * loop, max_frames, realtime, fps or folder_fps(p),
                                 [loop_id(f.stem, k) for k in range(loop) for f in files])
     elif p.is_file() and p.suffix.lower() in IMG_EXT:
         img = cv2.imread(str(p))

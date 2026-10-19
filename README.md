@@ -26,6 +26,7 @@ demo/                Live demo instance (runs on the Mac, standard library only)
   static/index.html    the dashboard (video + tracks, FPS / latency / policy, link emulator, charts)
 tools/
   visdrone.py          VisDrone2019-VID annotations -> YOLO labels with COCO class ids
+  mot.py               MOT17/MOT16/MOT20 pedestrian ground truth -> YOLO labels (COCO person)
   export_onnx_norm.py  YOLOv8 -> ONNX with 0..1 boxes (INT8-friendly output)
   make_calib_npy.py    calibration frames (.npy) for INT8 quantisation
   quantize_onnx.py     static INT8 quantisation with ONNX Runtime
@@ -148,6 +149,32 @@ Notes on scoring:
 - A plain mp4 without labels can still be used for latency, bandwidth and drop rate. To score a
   converted mp4, use `--labels ... --img-size 1344x756` instead of `--images`; video frames are
   named `0000001, 0000002, ...` like VisDrone frames.
+
+## Second dataset: MOT17 (ground-level video, larger objects)
+
+VisDrone is hard for the 320 px edge model: most objects are only a few pixels after resizing
+(local recall 0.06, 0.13 when objects < 32 px are ignored). MOT17 is pedestrian video at street
+level: real 30 fps (some 25/14 fps), every frame annotated, people tens to hundreds of pixels
+tall. Pick a sparse sequence, e.g. **MOT17-09** (1080p, 30 fps, ~10 people per frame, static
+camera) or MOT17-11 (~10.5 per frame, moving camera); MOT17-04 (~45 per frame) is crowded.
+
+```bash
+cd data && curl -L -C - -O https://motchallenge.net/data/MOT17.zip && unzip -q MOT17.zip && cd ..   # 5.5 GB
+python -m tools.mot list data/MOT17/train                 # frames, fps, size, persons/frame, median height
+./scripts/deploy_edge.sh local data/MOT17/train/MOT17-09-FRCNN --realtime
+./scripts/run_experiment.sh <GS-IP> data/MOT17/train/MOT17-09-FRCNN traces/fly_away_and_back.csv
+```
+
+* MOT17 contains each video three times (`-DPM`, `-FRCNN`, `-SDP`: only the public detections
+  differ); frames and ground truth are identical, use one of them.
+* Labels are converted automatically (`data/mot_labels/<sequence>`) and scored as **person
+  only** (`--classes 0`). As in the official MOTChallenge evaluation, only "considered"
+  pedestrians count; persons on vehicles, static persons, distractors and reflections are
+  ignore regions; vehicles and occluders too (not annotated consistently).
+  `python -m tools.mot convert <img1> --min-visibility 0.25` also ignores heavily occluded people.
+* Real-time replay uses the sequence's own frame rate from `seqinfo.ini` (25 fps for MOT17-13).
+* Not a UAV view: it isolates the link / processing trade-off from the tiny-object problem
+  of aerial video; the VisDrone runs remain the aerial reference.
 
 ## Edge mode: on-board INT8 model
 
