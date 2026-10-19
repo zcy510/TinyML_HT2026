@@ -1,0 +1,10 @@
+# RTT-only flight: only the extra round-trip delay changes (no loss, no rate limit, RSSI fixed),
+# so every mode switch is caused by RTT alone. Each phase favours a different mode:
+# good -> remote_full, moderate (RTT ~160 ms) -> remote_reduced, poor (RTT ~360 ms) -> local.
+t_s,rssi_dbm,delay_ms,jitter_ms,loss_pct,rate_mbit
+0,-50,0,0,0,0          # good          -> remote_full
+25,-50,150,10,0,0      # moderate      -> remote_reduced
+50,-50,350,10,0,0      # poor          -> local
+70,-50,150,10,0,0      # moderate      -> remote_reduced
+85,-50,0,0,0,0         # good again    -> remote_full
+110,-50,0,0,0,0        # end
