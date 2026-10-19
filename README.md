@@ -223,6 +223,10 @@ and `eval_detection` compare edge-only and remote runs directly.
   end-to-end time in the last 5 s exceeds the deadline (500 ms), the policy steps down a level.
 * **Stability**: a worse link must last 1 s (`--down-hold`), a better one 3 s (`--up-hold`);
   at least 2 s between switches (`--min-dwell`); recovery goes up one level at a time.
+* **Inference size per mode**: the ground station runs YOLO at `--full-imgsz` (default 1280)
+  for full frames and `--reduced-imgsz` (default 640) for 640 px frames, sent with each request,
+  so it never upscales a reduced frame and needs no restart. Fixed remote mode: `--imgsz 1280`.
+  (MOT17-09: recall 0.71 at 640 vs 0.74 at 1280 for full frames; inference 62 -> 96 ms on the Mac.)
 * **Fallback**: a remote request that fails or times out (timeout = deadline) is processed
   locally straight away, so every frame still gets a result (`--no-fallback` to disable).
 * All thresholds are flags (`--rtt-good --rtt-poor --loss-good --loss-poor --rssi-good

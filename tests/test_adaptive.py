@@ -129,10 +129,11 @@ def test_two_mode_policy():
 # --------------------------------------------------------- adaptive detector
 class FakeRemote:
     def __init__(self):
-        self.ok, self.calls = True, []
+        self.ok, self.calls, self.imgsz = True, [], []
 
-    def detect(self, frame, fid="", max_width=None, jpeg_quality=90, conf=None):
+    def detect(self, frame, fid="", max_width=None, jpeg_quality=90, conf=None, imgsz=None):
         self.calls.append((max_width, jpeg_quality))
+        self.imgsz.append(imgsz)
         if not self.ok:
             return RemoteResult(False, fid, e2e_ms=500.0, upload_bytes=1000, error="ReadTimeout")
         return RemoteResult(True, fid, [{"class_id": 2, "label": "car", "confidence": 0.9,
@@ -155,7 +156,8 @@ def test_adaptive_routes_by_mode_and_falls_back():
     mon.probe_once()
     pol = Policy(PolicyConfig(down_hold_s=0, up_hold_s=0, min_dwell_s=0))
     remote, local = FakeRemote(), FakeLocal()
-    ad = AdaptiveDetector(remote, local, mon, pol, reduced_width=640, reduced_quality=70, verbose=False)
+    ad = AdaptiveDetector(remote, local, mon, pol, reduced_width=640, reduced_quality=70, verbose=False,
+                          full_imgsz=1280, reduced_imgsz=640)
     img = np.zeros((10, 10, 3), np.uint8)
 
     ad.detect(img, "1")
@@ -170,6 +172,29 @@ def test_adaptive_routes_by_mode_and_falls_back():
     rtt["v"] = 400.0; mon.probe_once()
     ad.detect(img, "4")
     assert ad.row_info["mode"] == "local" and local.calls == 2 and len(remote.calls) == 3
+    assert remote.imgsz == [1280, 640, 640]          # inference size follows the mode
+
+
+def test_remote_detector_sends_imgsz(monkeypatch):
+    sent = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"detections": [], "timing": {}}
+
+    rd = RemoteDetector("http://gs:8000", imgsz=1280)
+    monkeypatch.setattr(rd.session, "post", lambda url, **kw: sent.append(kw["params"]) or Resp())
+    img = np.zeros((48, 64, 3), np.uint8)
+    rd.detect(img, "a")
+    rd.detect(img, "b", imgsz=640)
+    RemoteDetector("http://gs:8000").session                    # default: no imgsz sent
+    rd2 = RemoteDetector("http://gs:8000")
+    monkeypatch.setattr(rd2.session, "post", lambda url, **kw: sent.append(kw["params"]) or Resp())
+    rd2.detect(img, "c")
+    assert sent[0]["imgsz"] == 1280 and sent[1]["imgsz"] == 640 and "imgsz" not in sent[2]
 
 
 def _free_port():

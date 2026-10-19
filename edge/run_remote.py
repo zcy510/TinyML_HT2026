@@ -132,6 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-width", type=int, default=None,
                     help="downscale before sending (e.g. 320 for reduced-resolution mode)")
     ap.add_argument("--quality", type=int, default=90, help="JPEG quality 1-100")
+    ap.add_argument("--imgsz", type=int, default=None,
+                    help="remote mode: YOLO inference size on the ground station for every frame "
+                         "(e.g. 1280); default = the server's --imgsz")
     ap.add_argument("--conf", type=float, default=None)
     ap.add_argument("--timeout", type=float, default=2.0,
                     help="HTTP timeout in seconds (adaptive: at most the deadline)")
@@ -154,6 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="modes the policy may use, best first (e.g. remote_full,local)")
     g.add_argument("--reduced-width", type=int, default=640)
     g.add_argument("--reduced-quality", type=int, default=70)
+    g.add_argument("--full-imgsz", type=int, default=1280,
+                   help="ground-station inference size for remote_full frames (0 = server default)")
+    g.add_argument("--reduced-imgsz", type=int, default=640,
+                   help="ground-station inference size for remote_reduced frames (0 = server default)")
     g.add_argument("--rtt-good", type=float, default=100.0)
     g.add_argument("--rtt-poor", type=float, default=250.0)
     g.add_argument("--loss-good", type=float, default=0.05)
@@ -206,7 +213,8 @@ def build_client(args, ap):
         if not args.server:
             ap.error(f"--server is required in {args.mode} mode")
         timeout = min(args.timeout, args.deadline_ms / 1000.0) if args.mode == "adaptive" else args.timeout
-        remote = RemoteDetector(args.server, timeout)
+        remote = RemoteDetector(args.server, timeout,
+                                imgsz=args.imgsz if args.mode == "remote" else None)
         if shaper:
             from edge.demo_link import ShapedRemote
 
@@ -245,6 +253,7 @@ def build_client(args, ap):
             "policy_modes": [m.strip() for m in args.policy_modes.split(",")],
             "reduced_width": args.reduced_width, "reduced_quality": args.reduced_quality,
             "full_quality": args.quality, "shaper": shaper is not None,
+            "full_imgsz": args.full_imgsz, "reduced_imgsz": args.reduced_imgsz,
         })
     if monitor:
         monitor.start()
@@ -253,7 +262,8 @@ def build_client(args, ap):
     if args.mode == "local":
         return local, monitor, "local_" + os.path.splitext(os.path.basename(args.model))[0], reporter
     if args.mode == "remote":
-        return remote, monitor, f"w{args.max_width or 'full'}_q{args.quality}", reporter
+        name = f"w{args.max_width or 'full'}_q{args.quality}" + (f"_i{args.imgsz}" if args.imgsz else "")
+        return remote, monitor, name, reporter
 
     from edge.adaptive import AdaptiveDetector
     from edge.policy import Policy
@@ -264,7 +274,8 @@ def build_client(args, ap):
     policy.level = first
     print(f"[policy] start in {policy.mode} ({why})")
     client = AdaptiveDetector(remote, local, monitor, policy, args.reduced_width,
-                              args.reduced_quality, args.quality, fallback=not args.no_fallback)
+                              args.reduced_quality, args.quality, fallback=not args.no_fallback,
+                              full_imgsz=args.full_imgsz or None, reduced_imgsz=args.reduced_imgsz or None)
     return client, monitor, "adaptive", reporter
 
 

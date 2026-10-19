@@ -28,8 +28,10 @@ from edge.remote_client import RemoteResult
 class AdaptiveDetector:
     def __init__(self, remote, local, monitor: LinkMonitor, policy: Policy,
                  reduced_width: int = 640, reduced_quality: int = 70, full_quality: int = 90,
-                 fallback: bool = True, verbose: bool = True) -> None:
+                 fallback: bool = True, verbose: bool = True,
+                 full_imgsz: Optional[int] = None, reduced_imgsz: Optional[int] = None) -> None:
         self.remote, self.local, self.monitor, self.policy = remote, local, monitor, policy
+        self.full_imgsz, self.reduced_imgsz = full_imgsz, reduced_imgsz
         self.reduced_width, self.reduced_quality, self.full_quality = reduced_width, reduced_quality, full_quality
         self.fallback, self.verbose = fallback, verbose
         self.row_info: dict = {}
@@ -55,9 +57,9 @@ class AdaptiveDetector:
         if mode == "local":
             res = self.local.detect(frame_bgr, frame_id, conf=conf)
         else:
-            w, q = ((None, self.full_quality) if mode == "remote_full"
-                    else (self.reduced_width, self.reduced_quality))
-            res = self.remote.detect(frame_bgr, frame_id, w, q, conf)
+            w, q, sz = ((None, self.full_quality, self.full_imgsz) if mode == "remote_full"
+                        else (self.reduced_width, self.reduced_quality, self.reduced_imgsz))
+            res = self.remote.detect(frame_bgr, frame_id, w, q, conf, **({"imgsz": sz} if sz else {}))
             self.monitor.report_frame(res.ok, res.e2e_ms)
             if not res.ok and self.fallback:
                 loc = self.local.detect(frame_bgr, frame_id, conf=conf)

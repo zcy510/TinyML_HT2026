@@ -128,7 +128,8 @@ class ShapedRemote:
         return self.remote.ping(n)
 
     def detect(self, frame_bgr: np.ndarray, frame_id: str = "", max_width: Optional[int] = None,
-               jpeg_quality: int = 90, conf: Optional[float] = None) -> RemoteResult:
+               jpeg_quality: int = 90, conf: Optional[float] = None,
+               imgsz: Optional[int] = None) -> RemoteResult:
         s = self.shaper.settings
         t0 = time.perf_counter()
         timeout_ms = self.timeout_s * 1000.0
@@ -138,7 +139,8 @@ class ShapedRemote:
             return RemoteResult(False, frame_id, e2e_ms=(time.perf_counter() - t0) * 1000.0,
                                 upload_bytes=len(data), sent_size=size, scale=scale,
                                 error="Timeout (simulated loss)")
-        res = self.remote.detect(frame_bgr, frame_id, max_width, jpeg_quality, conf)
+        kw = {"imgsz": imgsz} if imgsz else {}
+        res = self.remote.detect(frame_bgr, frame_id, max_width, jpeg_quality, conf, **kw)
         if not res.ok:
             return res
         extra = self.shaper._delay_ms(s) + self.shaper.upload_ms(s, res.upload_bytes)

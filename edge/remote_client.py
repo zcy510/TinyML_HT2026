@@ -34,9 +34,10 @@ class RemoteResult:
 
 
 class RemoteDetector:
-    def __init__(self, server_url: str, timeout_s: float = 2.0) -> None:
+    def __init__(self, server_url: str, timeout_s: float = 2.0, imgsz: Optional[int] = None) -> None:
         self.url = server_url.rstrip("/")
         self.timeout_s = timeout_s
+        self.imgsz = imgsz          # ground-station inference size; None = the server's --imgsz
         self.session = requests.Session()   # keep-alive: avoids a TCP handshake per frame
 
     # ------------------------------------------------------------------ link
@@ -78,7 +79,10 @@ class RemoteDetector:
         max_width: Optional[int] = None,
         jpeg_quality: int = 90,
         conf: Optional[float] = None,
+        imgsz: Optional[int] = None,
     ) -> RemoteResult:
+        """imgsz: YOLO inference size on the ground station for this frame (e.g. 1280 for
+        full frames, 640 for reduced ones); None = self.imgsz, then the server default."""
         t0 = time.perf_counter()
         data, sent_size, scale = self.encode(frame_bgr, max_width, jpeg_quality)
         encode_ms = (time.perf_counter() - t0) * 1000.0
@@ -86,6 +90,8 @@ class RemoteDetector:
         params = {"frame_id": frame_id}
         if conf is not None:
             params["conf"] = conf
+        if imgsz or self.imgsz:
+            params["imgsz"] = int(imgsz or self.imgsz)
         try:
             r = self.session.post(
                 f"{self.url}/detect", data=data, params=params,
