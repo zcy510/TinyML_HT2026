@@ -122,8 +122,8 @@ def _evaluate_once(pred, images, labels, iou_thr, min_conf, classes, hold_last, 
     size = img_size
     frame_list = _frame_list(images, labels)
     if truncate:
-        last = max((i for i, (stem, _) in enumerate(frame_list) if stem in pred), default=-1)
-        frame_list = frame_list[: last + 1]
+        last_idx = max((i for i, (stem, _) in enumerate(frame_list) if stem in pred), default=-1)
+        frame_list = frame_list[: last_idx + 1]
     for stem, img_path in frame_list:
         dets = pred.get(stem)
         if dets is None:
